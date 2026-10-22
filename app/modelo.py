@@ -373,20 +373,34 @@ class Config:
 
     @staticmethod
     def cargar() -> "Config":
+        ruta = ruta_config()
         try:
-            d = json.loads(ruta_config().read_text(encoding="utf-8"))
+            d = json.loads(ruta.read_text(encoding="utf-8"))
+            if not isinstance(d, dict):
+                raise ValueError("config.json no es un objeto JSON")
             c = Config()
             for k in asdict(c):
                 if k in d:
                     setattr(c, k, d[k])
             return c
+        except FileNotFoundError:
+            return Config()
         except (OSError, ValueError, TypeError):
+            # Archivo ilegible o cortado: se conserva una copia antes de que el
+            # próximo guardado lo pise con los valores por defecto (las
+            # calibraciones se hacen con multímetro y no conviene perderlas).
+            try:
+                ruta.replace(ruta.with_suffix(".json.corrupto"))
+            except OSError:
+                pass
             return Config()
 
     def guardar(self):
         try:
             r = ruta_config()
             r.parent.mkdir(parents=True, exist_ok=True)
-            r.write_text(json.dumps(asdict(self), indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp = r.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(asdict(self), indent=2, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, r)      # atómico: nunca queda un config.json a medias
         except OSError:
             pass
