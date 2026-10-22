@@ -234,9 +234,13 @@ class TabBode(QWidget):
         ruta, _ = QFileDialog.getSaveFileName(self, "Exportar Bode", "bode.csv", "CSV (*.csv)")
         if not ruta:
             return
-        with open(ruta, "w", newline="", encoding="utf-8") as fh:
-            w = csv.writer(fh, delimiter=";")
-            w.writerow(["frecuencia_Hz", "ganancia_dB", "fase_grados", "vpp_entrada_V", "vpp_salida_V"])
-            for r in self.resultados:
-                w.writerow([f"{x:.6g}" for x in r])
+        try:
+            with open(ruta, "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh, delimiter=";")
+                w.writerow(["frecuencia_Hz", "ganancia_dB", "fase_grados", "vpp_entrada_V", "vpp_salida_V"])
+                for r in self.resultados:
+                    w.writerow([f"{x:.6g}" for x in r])
+        except OSError as e:
+            self.v.estado(f"No se pudo guardar {ruta}: {e.strerror or e}", W.ERROR)
+            return
         self.v.estado(f"Guardado: {ruta}", W.OK)

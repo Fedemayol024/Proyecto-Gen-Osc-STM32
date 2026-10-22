@@ -591,6 +591,13 @@ class TabOsciloscopio(QWidget):
         self.pedir()
 
     # ------------------------------------------------------------ exportar
+    def _avisar_guardado(self, guardado: bool, ruta: str):
+        """QPixmap.save() devuelve False si falla: no hay que decir 'Guardado' en ese caso."""
+        if guardado:
+            self.v.estado(f"Guardado: {ruta}", W.OK)
+        else:
+            self.v.estado(f"No se pudo guardar {ruta} (¿archivo en uso o carpeta de solo lectura?)", W.ERROR)
+
     def _exportar_csv(self):
         if not self.ultimo:
             return
@@ -599,11 +606,15 @@ class TabOsciloscopio(QWidget):
             return
         u = self.ultimo
         t = (np.arange(u["n"]) - u["pre"]) / u["fs"]
-        with open(ruta, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f, delimiter=";")
-            w.writerow(["tiempo_s", "ch1_V", "ch2_V"])
-            for i in range(u["n"]):
-                w.writerow([f"{t[i]:.9g}", f"{u[1][i]:.6g}", f"{u[2][i]:.6g}"])
+        try:
+            with open(ruta, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f, delimiter=";")
+                w.writerow(["tiempo_s", "ch1_V", "ch2_V"])
+                for i in range(u["n"]):
+                    w.writerow([f"{t[i]:.9g}", f"{u[1][i]:.6g}", f"{u[2][i]:.6g}"])
+        except OSError as e:
+            self.v.estado(f"No se pudo guardar {ruta}: {e.strerror or e}", W.ERROR)
+            return
         self.v.estado(f"Guardado: {ruta}", W.OK)
 
     def _exportar_png(self):
@@ -624,8 +635,7 @@ class TabOsciloscopio(QWidget):
         texto_cursores = self.lbl_cursores.text() if cursores_activos else ""
         
         if (not canales_sel or not meds_sel) and not cursores_activos:
-            pix_plot.save(ruta)
-            self.v.estado(f"Guardado: {ruta}", W.OK)
+            self._avisar_guardado(pix_plot.save(ruta), ruta)
             return
             
         nombres_med = {
@@ -698,5 +708,4 @@ class TabOsciloscopio(QWidget):
             painter.drawText(int(margen_x), int(y_cursor), f"Cursores: {texto_cursores}")
                 
         painter.end()
-        imagen_final.save(ruta)
-        self.v.estado(f"Guardado: {ruta}", W.OK)
+        self._avisar_guardado(imagen_final.save(ruta), ruta)
