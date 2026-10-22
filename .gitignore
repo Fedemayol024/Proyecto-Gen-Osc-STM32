@@ -1,0 +1,22 @@
+# STM32CubeIDE / Eclipse: estado del IDE y salida de compilación
+.metadata/
+Debug/
+Release/
+
+# Respaldos y material generado (no son fuente)
+firmware/_viejo/
+para_gemini/
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+app/build/
+app/dist/
+
+# Sistema
+Thumbs.db
+desktop.ini
+
+# Respaldos del editor
+*.bak
