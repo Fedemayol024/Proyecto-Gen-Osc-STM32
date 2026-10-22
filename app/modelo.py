@@ -274,7 +274,7 @@ def medir(v: np.ndarray, fs: float) -> dict:
                 subidas.append(float(j))
         elif estado and v[i] < bajo:
             estado = False
-    if len(subidas) >= 2:
+    if len(subidas) >= 2 and fs > 0:
         periodo_m = (subidas[-1] - subidas[0]) / (len(subidas) - 1)
         if periodo_m > 0:
             r["periodo"] = periodo_m / fs

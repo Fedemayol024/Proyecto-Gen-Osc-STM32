@@ -458,7 +458,7 @@ class TabOsciloscopio(QWidget):
                 if vis and n >= 32:
                     f, db = M.espectro(u[c], fs)
                     self.curvas_fft[c].setData(f[1:], db[1:])
-        estado = {2: "Libre", 1: "Disparado", 0: "Auto (sin disparo)"}[u["disparado"]]
+        estado = {2: "Libre", 1: "Disparado", 0: "Auto (sin disparo)"}.get(u["disparado"], "Desconocido")
         if not self.corriendo:
             estado = "Detenido"
         self.txt_estado.setText(f"{estado}   {M.si(fs, 'S/s', 3)}   {self.fps:.0f} cuadros/s")

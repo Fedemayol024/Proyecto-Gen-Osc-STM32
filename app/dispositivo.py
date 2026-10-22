@@ -182,6 +182,8 @@ class Dispositivo(QObject):
                                      "disparado": int(p[4])}
                     except (IndexError, ValueError):
                         esperando = None
+                    if esperando is not None and not 0 < esperando["n"] <= int(self.info.get("ventana", 8192)):
+                        esperando = None   # encabezado dañado: no esperar bytes que nunca van a llegar
                 elif linea:
                     self.linea.emit(linea)
 
