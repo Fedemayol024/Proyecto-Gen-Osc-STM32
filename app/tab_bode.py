@@ -49,9 +49,9 @@ class TabBode(QWidget):
         self.p_fase.setLabel("bottom", "Frecuencia")
         self.p_fase.setXLink(self.p_mag)
         self.c_mag = self.p_mag.plot(pen=pg.mkPen(W.CH2, width=2), symbol="o", symbolSize=5,
-                                     symbolBrush=W.CH2, symbolPen=None)
+                                     symbolBrush=W.CH2, symbolPen=None, antialias=True)
         self.c_fase = self.p_fase.plot(pen=pg.mkPen("#d2a8ff", width=2), symbol="o", symbolSize=5,
-                                       symbolBrush="#d2a8ff", symbolPen=None)
+                                       symbolBrush="#d2a8ff", symbolPen=None, antialias=True)
         self.ref_3db = pg.InfiniteLine(angle=0, pen=pg.mkPen(W.TENUE, style=pg.QtCore.Qt.DashLine))
         self.p_mag.addItem(self.ref_3db)
         self.ref_3db.setVisible(False)

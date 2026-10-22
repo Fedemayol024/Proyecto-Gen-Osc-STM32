@@ -22,8 +22,19 @@ TDIVS = [2e-6, 5e-6, 10e-6, 20e-6, 50e-6, 100e-6, 200e-6, 500e-6, 1e-3, 2e-3, 5e
 VDIVS = [1e-3, 2e-3, 5e-3, 10e-3, 20e-3, 50e-3, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
 COLORES = {1: W.CH1, 2: W.CH2}
 # Hasta esta base de tiempo se capturan 3 pantallas (una extra a cada lado) para poder desplazar.
-# Más lento, el cuadro tardaría demasiado en llegar.
-TDIV_DESPLAZ_MAX = 10e-3
+# Más lento, el cuadro tardaría demasiado en llegar (la placa además busca el disparo en 2
+# capturas más, así que una captura de 3 pantallas cuesta 9 pantallas de tiempo).
+TDIV_DESPLAZ_MAX = 2e-3
+
+
+def curva_rapida(plot, color, ancho=1.0):
+    """Curva optimizada para refrescar muchas veces por segundo: sin antialiasing (el
+    antialiasing con trazo grueso era lo que trababa la app: 40-100 ms por cuadro),
+    sin chequeo de NaN y dibujando solo lo visible, con diezmado por picos."""
+    c = plot.plot(pen=pg.mkPen(color, width=ancho), antialias=False, skipFiniteCheck=True)
+    c.setClipToView(True)
+    c.setDownsampling(auto=True, method="peak")
+    return c
 
 
 
@@ -151,7 +162,6 @@ class TabOsciloscopio(QWidget):
         # ------------------------------------------------ gráfico
         izq = QVBoxLayout()
         raiz.addLayout(izq, 1)
-        pg.setConfigOptions(antialias=True)
         self.plot = pg.PlotWidget(background=W.FONDO)
         self.plot.setMenuEnabled(False)
         self.plot.setMouseEnabled(False, False)
@@ -168,8 +178,9 @@ class TabOsciloscopio(QWidget):
             self.plot.addItem(pg.InfiniteLine(pos=y, angle=0, pen=pg.mkPen(W.REJILLA)))
         self.plot.addItem(pg.InfiniteLine(pos=DIV_X / 2, angle=90, pen=pg.mkPen("#3b4654", width=1)))
         self.plot.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#3b4654", width=1)))
-        self.curvas = {c: self.plot.plot(pen=pg.mkPen(COLORES[c], width=1.6)) for c in (1, 2)}
-        self.curva_xy = self.plot.plot(pen=pg.mkPen("#a5d6ff", width=1.4))
+        self.curvas = {c: curva_rapida(self.plot, COLORES[c]) for c in (1, 2)}
+        self.curva_xy = self.plot.plot(pen=pg.mkPen("#a5d6ff", width=1), antialias=False,
+                                       skipFiniteCheck=True)
 
         self.linea_nivel = pg.InfiniteLine(angle=0, movable=True, pen=pg.mkPen(W.ALERTA, width=1,
                                                                                style=Qt.DashLine))
@@ -212,7 +223,7 @@ class TabOsciloscopio(QWidget):
         self.plot_fft.showGrid(x=True, y=True, alpha=0.3)
         self.plot_fft.setYRange(-100, 20)
         self.plot_fft.setLogMode(x=True, y=False)
-        self.curvas_fft = {c: self.plot_fft.plot(pen=pg.mkPen(COLORES[c], width=1.2)) for c in (1, 2)}
+        self.curvas_fft = {c: curva_rapida(self.plot_fft, COLORES[c]) for c in (1, 2)}
         self.plot_fft.setVisible(False)
         izq.addWidget(self.plot_fft, 2)
 
