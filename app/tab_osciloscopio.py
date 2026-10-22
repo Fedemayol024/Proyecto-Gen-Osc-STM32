@@ -21,6 +21,9 @@ TDIVS = [2e-6, 5e-6, 10e-6, 20e-6, 50e-6, 100e-6, 200e-6, 500e-6, 1e-3, 2e-3, 5e
          20e-3, 50e-3, 100e-3, 200e-3, 500e-3, 1.0]
 VDIVS = [1e-3, 2e-3, 5e-3, 10e-3, 20e-3, 50e-3, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
 COLORES = {1: W.CH1, 2: W.CH2}
+# Hasta esta base de tiempo se capturan 3 pantallas (una extra a cada lado) para poder desplazar.
+# Más lento, el cuadro tardaría demasiado en llegar.
+TDIV_DESPLAZ_MAX = 10e-3
 
 
 
@@ -172,8 +175,19 @@ class TabOsciloscopio(QWidget):
                                                                                style=Qt.DashLine))
         self.linea_nivel.sigPositionChangeFinished.connect(self._nivel_arrastrado)
         self.plot.addItem(self.linea_nivel)
-        self.marca_disparo = pg.InfiniteLine(angle=90, pen=pg.mkPen(W.ALERTA, width=1, style=Qt.DotLine))
+        # Referencias: 0 s = instante del disparo; 0 V = nivel cero de cada canal
+        self.marca_disparo = pg.InfiniteLine(angle=90, pen=pg.mkPen(QColor(230, 237, 243, 235), width=1.8))
         self.plot.addItem(self.marca_disparo)
+        self.txt_cero_t = pg.TextItem("0 s", color=W.TEXTO, anchor=(0, 0))
+        self.plot.addItem(self.txt_cero_t)
+        self.cero_v, self.txt_cero_v = {}, {}
+        for c in (1, 2):
+            col = QColor(COLORES[c])
+            col.setAlpha(225)
+            self.cero_v[c] = pg.InfiniteLine(angle=0, pen=pg.mkPen(col, width=1.7))
+            self.txt_cero_v[c] = pg.TextItem(f"CH{c} 0 V", color=COLORES[c], anchor=(0, 1))
+            self.plot.addItem(self.cero_v[c])
+            self.plot.addItem(self.txt_cero_v[c])
 
         # cursores
         pc = pg.mkPen("#d2a8ff", width=1, style=Qt.DashLine)
@@ -264,8 +278,21 @@ class TabOsciloscopio(QWidget):
         self.pos_disp.setRange(0, 100)
         self.pos_disp.setValue(cfg.get("pos_disp", 50))
         self.pos_disp.valueChanged.connect(self._cambio)
+        self.desplaz = QSlider(Qt.Horizontal)
+        self.desplaz.setRange(-100, 100)          # décimas de división: ±10 div
+        self.desplaz.setValue(int(cfg.get("desplaz", 0)))
+        self.desplaz.valueChanged.connect(self._cambio)
         lay.addWidget(W.fila("Tiempo", self.tdiv))
         lay.addWidget(W.fila("Posición disparo", self.pos_disp))
+        lay.addWidget(W.fila("Desplazar", self.desplaz,
+                             ayuda=f"Mueve la señal en el tiempo, hasta ±10 div. Disponible hasta "
+                                   f"{M.si(TDIV_DESPLAZ_MAX, 's')}/div (captura 3 pantallas)."))
+        fila_d = QHBoxLayout()
+        self.lbl_desplaz = W.etiqueta_tenue("")
+        fila_d.addWidget(self.lbl_desplaz)
+        fila_d.addStretch(1)
+        fila_d.addWidget(W.boton("Centrar", lambda: self.desplaz.setValue(0)))
+        lay.addLayout(fila_d)
         self.lbl_fs = W.etiqueta_tenue("")
         lay.addWidget(self.lbl_fs)
         pl.addWidget(g)
@@ -315,7 +342,7 @@ class TabOsciloscopio(QWidget):
         return {"tdiv": self.tdiv.currentIndex(), "pos_disp": self.pos_disp.value(),
                 "fuente": self.fuente.currentText(), "flanco": self.flanco.currentText(),
                 "modo": self.modo.currentText(), "nivel": self.nivel.valor(),
-                "suavizado": self.suavizado.currentIndex(),
+                "suavizado": self.suavizado.currentIndex(), "desplaz": self.desplaz.value(),
                 "ch1": self.canales[1].estado(), "ch2": self.canales[2].estado()}
 
     @property
@@ -325,6 +352,43 @@ class TabOsciloscopio(QWidget):
     def recta(self, c: int) -> M.Recta:
         return self.v.config.recta_entrada(c, self.canales[c].clave_entrada)
 
+    # ------------------------------------------------------------ eje horizontal
+    @property
+    def desplazamiento(self) -> float:
+        """Desplazamiento horizontal en divisiones. Solo existe con las bases de tiempo
+        que capturan pantallas extra; con las lentas se ignora."""
+        return self.desplaz.value() / 10.0 if self.t_div <= TDIV_DESPLAZ_MAX else 0.0
+
+    def _x0(self) -> float:
+        """Posición en pantalla (en divisiones) del instante 0 s, el del disparo."""
+        return DIV_X * self.pos_disp.value() / 100 - self.desplazamiento
+
+    def _indices_visibles(self, u: dict) -> tuple[int, int]:
+        """Rango [i0, i1) de las muestras del cuadro que caen dentro de la pantalla."""
+        n, pre = u["n"], u["pre"]
+        por_div = u["fs"] * self.t_div
+        x0 = self._x0()
+        i0 = int(np.clip(np.rint(pre - x0 * por_div), 0, n))
+        i1 = int(np.clip(np.rint(pre + (DIV_X - x0) * por_div), 0, n))
+        return i0, max(i0, i1)
+
+    def _actualizar_ceros(self):
+        """Marca 0 s (instante del disparo) y el 0 V de cada canal."""
+        xy = self.modo_xy.isChecked()
+        x0 = self._x0()
+        self.marca_disparo.setPos(x0)
+        self.marca_disparo.setVisible(not xy)
+        self.txt_cero_t.setVisible(not xy and 0 <= x0 <= DIV_X)
+        self.txt_cero_t.setPos(x0 + 0.08, DIV_Y / 2 - 0.1)
+        for c in (1, 2):
+            p = self.canales[c]
+            y = p.pos.valor()
+            visible = p.visible.isChecked() and not xy
+            self.cero_v[c].setVisible(visible)
+            self.cero_v[c].setPos(y)
+            self.txt_cero_v[c].setVisible(visible and -DIV_Y / 2 <= y <= DIV_Y / 2)
+            self.txt_cero_v[c].setPos(0.05 + (c - 1) * 1.3, y)
+
     # ------------------------------------------------------------ adquisición
     def parametros_captura(self):
         fsmax = self.v.disp.info.get("osc_fsmax", 1.6e6) if self.v.disp.esta_conectado else 1.6e6
@@ -333,6 +397,10 @@ class TabOsciloscopio(QWidget):
         n = int(round(fs * DIV_X * tdiv))
         n = max(16, min(8192, n))
         pre = int(round(n * self.pos_disp.value() / 100))
+        if tdiv <= TDIV_DESPLAZ_MAX:        # una pantalla extra a cada lado, para poder desplazar
+            extra = min(n, (8192 - n) // 2)
+            n += 2 * extra
+            pre += extra
         fuente = {"CH1": 1, "CH2": 2, "Libre": 0}[self.fuente.currentText()]
         # Base de tiempo lenta en modo automático: sin buscar disparo (si no,
         # habría que esperar 3 pantallas)
@@ -418,31 +486,32 @@ class TabOsciloscopio(QWidget):
             self._fps_n, self._fps_t = 0, ahora
 
     def _dibujar(self):
+        self._actualizar_ceros()
         u = self.ultimo
         if not u:
             return
-        fs, pre, n = u["fs"], u["pre"], u["n"]
+        fs, pre = u["fs"], u["pre"]
         tdiv = self.t_div
-        x0 = DIV_X * self.pos_disp.value() / 100
-        x = x0 + (np.arange(n) - pre) / fs / tdiv
+        i0, i1 = self._indices_visibles(u)      # solo lo que cae dentro de la pantalla
+        x = self._x0() + (np.arange(i0, i1) - pre) / fs / tdiv
         xy = self.modo_xy.isChecked()
         for c in (1, 2):
             p = self.canales[c]
             visible = p.visible.isChecked() and not xy
             self.curvas[c].setVisible(visible)
             if visible:
-                y = np.clip(u[c] / p.v_div + p.pos.valor(), -DIV_Y, DIV_Y)
+                y = np.clip(u[c][i0:i1] / p.v_div + p.pos.valor(), -DIV_Y, DIV_Y)
                 self.curvas[c].setData(x, y)
         self.curva_xy.setVisible(xy)
         self.marca_disparo.setVisible(not xy)
         self.linea_nivel.setVisible(not xy and self.fuente.currentText() != "Libre")
         if xy:
             p1, p2 = self.canales[1], self.canales[2]
-            self.curva_xy.setData(np.clip(u[1] / p1.v_div + p1.pos.valor() + DIV_X / 2, -1, DIV_X + 1),
-                                  np.clip(u[2] / p2.v_div + p2.pos.valor(), -DIV_Y, DIV_Y))
+            self.curva_xy.setData(np.clip(u[1][i0:i1] / p1.v_div + p1.pos.valor() + DIV_X / 2, -1, DIV_X + 1),
+                                  np.clip(u[2][i0:i1] / p2.v_div + p2.pos.valor(), -DIV_Y, DIV_Y))
         # mediciones
         for c in (1, 2):
-            m = M.medir(u[c], fs) if self.canales[c].visible.isChecked() else {}
+            m = M.medir(u[c][i0:i1], fs) if self.canales[c].visible.isChecked() else {}
             for k in ("frec", "periodo", "vpp", "vmax", "vmin", "media", "rms", "ciclo"):
                 val = m.get(k)
                 unidad = {"frec": "Hz", "periodo": "s", "ciclo": "%"}.get(k, "V")
@@ -454,8 +523,8 @@ class TabOsciloscopio(QWidget):
             for c in (1, 2):
                 vis = self.canales[c].visible.isChecked()
                 self.curvas_fft[c].setVisible(vis)
-                if vis and n >= 32:
-                    f, db = M.espectro(u[c], fs)
+                if vis and i1 - i0 >= 32:
+                    f, db = M.espectro(u[c][i0:i1], fs)
                     self.curvas_fft[c].setData(f[1:], db[1:])
         estado = {2: "Libre", 1: "Disparado", 0: "Auto (sin disparo)"}.get(u["disparado"], "Desconocido")
         if not self.corriendo:
@@ -465,7 +534,7 @@ class TabOsciloscopio(QWidget):
 
     # ------------------------------------------------------------ controles
     def _cambio(self, *_):
-        self.marca_disparo.setPos(DIV_X * self.pos_disp.value() / 100)
+        self.marca_disparo.setPos(self._x0())
         fuente = {"CH1": 1, "CH2": 2, "Libre": 0}[self.fuente.currentText()]
         self.linea_nivel.setVisible(fuente != 0)
         if fuente:
@@ -476,6 +545,10 @@ class TabOsciloscopio(QWidget):
             self.linea_nivel.blockSignals(False)
         n, pre, fs, *_ = self.parametros_captura()
         self.lbl_fs.setText(f"Muestreo: {M.si(fs, 'S/s', 3)} · {n} puntos")
+        if self.t_div <= TDIV_DESPLAZ_MAX:
+            self.lbl_desplaz.setText(f"Desplazamiento: {self.desplaz.value() / 10:+.1f} div".replace(".", ","))
+        else:
+            self.lbl_desplaz.setText(f"Solo hasta {M.si(TDIV_DESPLAZ_MAX, 's')}/div")
         partes = []
         for c in (1, 2):
             if self.canales[c].visible.isChecked():
@@ -583,6 +656,7 @@ class TabOsciloscopio(QWidget):
         self.flanco.setCurrentText("Subida")
         self.nivel.set_valor(m.get("media", 0.0) if self.canales[fuente].acople.currentText() == "DC" else 0)
         self.pos_disp.setValue(50)
+        self.desplaz.setValue(0)
         self._cambio()
         txt = f"Autoset listo: {M.si(m['frec'], 'Hz')}" if m.get("frec") else "Autoset: no se detectó una señal periódica."
         self.v.estado(txt, W.OK if m.get("frec") else W.ALERTA)
@@ -598,19 +672,28 @@ class TabOsciloscopio(QWidget):
             self.v.estado(f"No se pudo guardar {ruta} (¿archivo en uso o carpeta de solo lectura?)", W.ERROR)
 
     def _exportar_csv(self):
+        """Exporta lo que se ve en pantalla: solo los canales visibles y solo el tramo visible."""
         if not self.ultimo:
+            return
+        canales = [c for c in (1, 2) if self.canales[c].visible.isChecked()]
+        if not canales:
+            self.v.estado("No hay ningún canal visible para exportar.", W.ALERTA)
+            return
+        u = self.ultimo
+        i0, i1 = self._indices_visibles(u)
+        if i1 - i0 < 2:
+            self.v.estado("No hay datos dentro de la pantalla para exportar.", W.ALERTA)
             return
         ruta, _ = QFileDialog.getSaveFileName(self, "Exportar captura", "captura.csv", "CSV (*.csv)")
         if not ruta:
             return
-        u = self.ultimo
-        t = (np.arange(u["n"]) - u["pre"]) / u["fs"]
+        t = (np.arange(i0, i1) - u["pre"]) / u["fs"]
         try:
             with open(ruta, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f, delimiter=";")
-                w.writerow(["tiempo_s", "ch1_V", "ch2_V"])
-                for i in range(u["n"]):
-                    w.writerow([f"{t[i]:.9g}", f"{u[1][i]:.6g}", f"{u[2][i]:.6g}"])
+                w.writerow(["tiempo_s"] + [f"ch{c}_V" for c in canales])
+                for k in range(i1 - i0):
+                    w.writerow([f"{t[k]:.9g}"] + [f"{u[c][i0 + k]:.6g}" for c in canales])
         except OSError as e:
             self.v.estado(f"No se pudo guardar {ruta}: {e.strerror or e}", W.ERROR)
             return
