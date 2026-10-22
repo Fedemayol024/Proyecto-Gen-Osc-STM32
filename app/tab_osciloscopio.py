@@ -402,8 +402,7 @@ class TabOsciloscopio(QWidget):
             v = self.recta(c).volt(d[f"ch{c}"]) * self.canales[c].factor
             
             # Aplicar filtro de Promedio Móvil si está activado
-            if ventana > 1 and len(v) >= ventana:
-                v = np.convolve(v, np.ones(ventana)/ventana, mode='same')
+            v = M.suavizar(v, ventana)
             
             if self.canales[c].acople.currentText() == "AC":
                 v = v - v.mean()

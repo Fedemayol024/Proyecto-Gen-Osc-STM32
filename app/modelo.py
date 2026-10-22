@@ -285,6 +285,17 @@ def medir(v: np.ndarray, fs: float) -> dict:
     return r
 
 
+def suavizar(v: np.ndarray, ventana: int) -> np.ndarray:
+    """Promedio móvil centrado de 'ventana' puntos. Los bordes se rellenan
+    repitiendo el primer y el último valor: con ceros (np.convolve 'same'), los
+    extremos de la captura caían hacia 0 V."""
+    if ventana <= 1 or len(v) < ventana:
+        return v
+    izq = ventana // 2
+    relleno = np.pad(v, (izq, ventana - 1 - izq), mode="edge")
+    return np.convolve(relleno, np.ones(ventana) / ventana, mode="valid")
+
+
 def ajuste_seno(v: np.ndarray, fs: float, f: float) -> tuple[float, float, float]:
     """Ajuste por mínimos cuadrados a A·sen(2πft + φ) + C. Devuelve (A, φ en rad, C)."""
     t = np.arange(len(v)) / fs
