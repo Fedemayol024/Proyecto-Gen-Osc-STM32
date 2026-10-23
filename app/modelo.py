@@ -317,6 +317,122 @@ def espectro(v: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray]:
 
 
 # ---------------------------------------------------------------------------
+# Tiempo equivalente: señales repetitivas plegadas por fase
+# ---------------------------------------------------------------------------
+# Una captura larga contiene miles de períodos de una señal repetitiva. Si se conoce su
+# frecuencia con precisión, cada muestra se ubica según su fase dentro del período y se
+# reconstruye un período con muchos más puntos de los que da el ADC en tiempo real.
+# Solo sirve para señales periódicas y estables: los eventos únicos se pierden.
+TCLK_TIMER = 216e6        # reloj de TIM8, el que fija la frecuencia de muestreo
+
+
+def fs_para_arr(arr: int, tclk: float = TCLK_TIMER) -> float:
+    """Frecuencia de muestreo que el firmware obtiene con ARR = arr (PSC = 1)."""
+    return tclk / arr
+
+
+def _casilleros_ocupados(f: float, arr: int, n: int, bins: int, tclk: float) -> int:
+    fase = (f * np.arange(n) * arr / tclk) % 1.0
+    idx = np.minimum((fase * bins).astype(int), bins - 1)
+    return int(np.count_nonzero(np.bincount(idx, minlength=bins)))
+
+
+def elegir_arr(f: float, fs_max: float, n: int = 8192, bins: int = 256,
+               tclk: float = TCLK_TIMER, candidatos: int = 48) -> tuple[int, int]:
+    """ARR de muestreo que mejor reparte las fases de una señal de frecuencia f.
+
+    Si f/fs tiene un denominador chico (señales 'redondas' con reloj común, como el PWM
+    de la placa), las muestras caen siempre en las mismas pocas fases y el plegado falla.
+    Se evalúa el peor caso entre f y f ± 2 ppm. Devuelve (arr, casilleros_ocupados)."""
+    arr0 = int(math.ceil(tclk / fs_max))
+    mejor = None
+    for arr in range(arr0, arr0 + candidatos):
+        ocupados = min(_casilleros_ocupados(f * (1 + d), arr, n, bins, tclk) for d in (-2e-6, 0.0, 2e-6))
+        if mejor is None or ocupados > mejor[1]:
+            mejor = (arr, ocupados)
+    return mejor
+
+
+def refinar_frecuencia(v: np.ndarray, fs: float, f0: float, rango_rel: float = 3e-4,
+                       puntos: int = 121) -> float:
+    """Afina la frecuencia de una señal periódica a partir de una estimación f0 (la del
+    frecuencímetro, por ejemplo): busca el máximo de la DFT con ventana de Hann cerca de f0.
+    Con 8192 muestras el lóbulo principal mide ~390 Hz, así que f0 debe estar dentro de ese orden."""
+    v = np.asarray(v, dtype=float)
+    t = np.arange(len(v)) / fs
+    x = np.hanning(len(v)) * (v - v.mean())
+
+    def mag(f):
+        return abs(np.dot(x, np.exp(-2j * np.pi * f * t)))
+
+    grilla = np.linspace(f0 * (1 - rango_rel), f0 * (1 + rango_rel), puntos)
+    i = int(np.argmax([mag(f) for f in grilla]))
+    a, b = grilla[max(i - 1, 0)], grilla[min(i + 1, puntos - 1)]
+    for _ in range(40):                                  # sección áurea
+        c, d = b - 0.618 * (b - a), a + 0.618 * (b - a)
+        if mag(c) > mag(d):
+            b = d
+        else:
+            a = c
+    return (a + b) / 2
+
+
+def _casilleros(v: np.ndarray, fs: float, f: float, bins: int) -> np.ndarray:
+    fase = (f * np.arange(len(v)) / fs) % 1.0
+    return np.minimum((fase * bins).astype(int), bins - 1)
+
+
+def plegar_por_fase(v: np.ndarray, fs: float, f: float, bins: int = 256) -> tuple[np.ndarray, np.ndarray]:
+    """Pliega la captura sobre un período de frecuencia f. Devuelve (perfil, cuenta): 'perfil'
+    tiene 'bins' puntos (promedio de las muestras de cada casillero; los vacíos se interpolan)
+    y 'cuenta' cuántas muestras cayeron en cada uno. La fase 0 es el instante inicial."""
+    v = np.asarray(v, dtype=float)
+    idx = _casilleros(v, fs, f, bins)
+    cuenta = np.bincount(idx, minlength=bins)
+    perfil = np.bincount(idx, weights=v, minlength=bins) / np.maximum(cuenta, 1)
+    vacios = cuenta == 0
+    if vacios.all():
+        raise ValueError("no hay muestras para plegar")
+    if vacios.any():
+        x = np.arange(bins)
+        perfil[vacios] = np.interp(x[vacios], x[~vacios], perfil[~vacios], period=bins)
+    return perfil, cuenta
+
+
+def alinear_a_flanco(perfil: np.ndarray, nivel: float | None = None) -> tuple[np.ndarray, int]:
+    """Rota el perfil para que empiece en el primer cruce ascendente por 'nivel' (por defecto
+    la media). Devuelve (perfil_rotado, desplazamiento); con el mismo desplazamiento se alinea
+    otro canal de la misma frecuencia sin perder la fase entre ambos."""
+    perfil = np.asarray(perfil, dtype=float)
+    nivel = float(perfil.mean()) if nivel is None else nivel
+    arriba = perfil > nivel
+    sube = np.flatnonzero(~arriba & np.roll(arriba, -1))
+    if len(sube) == 0:
+        return perfil, 0
+    s = int(sube[0]) + 1
+    return np.roll(perfil, -s), s
+
+
+def calidad_plegado(v: np.ndarray, fs: float, f: float, bins: int = 256) -> float:
+    """Qué tan repetitiva es la señal: RMS (en las unidades de v) de lo que queda al restar a cada
+    muestra el perfil plegado. En una señal periódica y estable es solo el ruido del ADC; si es
+    mucho mayor, la señal no es repetitiva (o f está mal) y el plegado no sirve."""
+    v = np.asarray(v, dtype=float)
+    perfil, cuenta = plegar_por_fase(v, fs, f, bins)
+    fase = (f * np.arange(len(v)) / fs) % 1.0
+    idx = np.minimum((fase * bins).astype(int), bins - 1)
+    c = cuenta[idx]
+    ok = c > 1
+    if not ok.any():
+        return float("inf")
+    # El perfil se interpola en la fase exacta de cada muestra: comparar con el promedio del
+    # casillero sumaría el error de cuantización de la fase en los flancos empinados.
+    prediccion = np.interp(fase * bins - 0.5, np.arange(bins), perfil, period=bins)
+    residuo = (v - prediccion)[ok]
+    return float(np.sqrt(np.mean(residuo ** 2 * c[ok] / (c[ok] - 1))))   # corrige el sesgo del promedio
+
+
+# ---------------------------------------------------------------------------
 # Formato de números (coma decimal)
 # ---------------------------------------------------------------------------
 _PREF = [(1e9, "G"), (1e6, "M"), (1e3, "k"), (1.0, ""), (1e-3, "m"), (1e-6, "µ"), (1e-9, "n")]
