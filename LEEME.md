@@ -116,6 +116,7 @@ Para crear el `.exe`, hacé doble clic en `app/build_exe.bat`. Necesita Python 3
    - **RUN/STOP**, **Único** y **Autoset**.
    - Tiempo/div, V/div y posición. La línea naranja de disparo se puede arrastrar.
    - En **Entrada** elegí "Placa ±10 V", "Placa ±1 V (×10)" (tiene que coincidir con la llave S2/S4 de la placa) o "Pin directo".
+   - **Adquisición → Tiempo equivalente:** para señales **repetitivas y estables** de más de ~200 kHz, que en tiempo real no se reconocen. Conectá la misma señal al canal y a **PA0** (el frecuencímetro mide la frecuencia); la app captura 8192 muestras, las ordena según la fase de la señal y dibuja un período con 256 puntos. Si la señal no se repite, avisa y conviene volver a *Tiempo real*. No sirve para eventos únicos ni para señales que cambian de frecuencia. El ancho de banda real lo limita el frontal analógico (con el MCP6024, ~0,7 MHz a 3 Vpp y varios MHz con señales chicas). Para probarlo sin hardware extra: PWM de la pestaña Herramientas (PE9) a PA0 y al canal 1 en "Pin directo".
 4. **Bode:** conectá Generador CH1 → entrada del circuito y IN1, y la salida del circuito → IN2. Elegí el rango y tocá *Iniciar barrido*.
 5. **Frecuencímetro y PWM:** lectura grande con el método usado. El PWM muestra los valores reales obtenidos.
 6. **Calibración** (una vez):
