@@ -253,7 +253,7 @@ class TabBode(QWidget):
                 w = csv.writer(fh, delimiter=";")
                 w.writerow(["frecuencia_Hz", "ganancia_dB", "fase_grados", "vpp_entrada_V", "vpp_salida_V"])
                 for r in self.resultados:
-                    w.writerow([f"{x:.6g}" for x in r])
+                    w.writerow([M.num_csv(x) for x in r])
         except OSError as e:
             self.v.estado(f"No se pudo guardar {ruta}: {e.strerror or e}", W.ERROR)
             return

@@ -164,21 +164,25 @@ def forma_normalizada(forma: str, ciclo: float, arbitraria: np.ndarray | None = 
     return np.zeros(TABLA_N)
 
 
+def num_csv(x: float, fmt: str = ".6g") -> str:
+    """Número para un CSV separado por ';' con coma decimal, como lo abre Excel en español."""
+    return format(x, fmt).replace(".", ",")
+
+
 def leer_csv_forma(ruta: str) -> np.ndarray:
-    """Lee una columna de números (la última de cada fila) de un CSV o TXT."""
+    """Lee una columna de números (la última de cada fila) de un CSV o TXT.
+    Acepta ';' o tabulador con coma o punto decimal, y ',' con punto decimal."""
     valores = []
     with open(ruta, encoding="utf-8", errors="replace") as f:
         for linea in f:
-            partes = [p for p in linea.replace(";", ",").replace("\t", ",").split(",") if p.strip()]
+            sep = ";" if ";" in linea else "\t" if "\t" in linea else ","
+            partes = [p for p in linea.split(sep) if p.strip()]
             if not partes:
                 continue
             try:
-                valores.append(float(partes[-1].strip().replace(" ", "")))
+                valores.append(float(partes[-1].strip().replace(" ", "").replace(",", ".")))
             except ValueError:
-                try:
-                    valores.append(float(partes[-1].strip().replace(",", ".")))
-                except ValueError:
-                    continue
+                continue
     if len(valores) < 2:
         raise ValueError("El archivo no tiene al menos 2 valores numéricos.")
     return np.array(valores)

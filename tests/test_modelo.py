@@ -145,6 +145,34 @@ class TestTablaGenerador(unittest.TestCase):
         self.assertEqual(int(t.codigos.min()), int(t.codigos.max()))
 
 
+class TestCsv(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _leer(self, texto):
+        ruta = Path(self._tmp.name) / "forma.csv"
+        ruta.write_text(texto, encoding="utf-8")
+        return list(M.leer_csv_forma(str(ruta)))
+
+    def test_coma_decimal_para_excel_en_espanol(self):
+        self.assertEqual(M.num_csv(-0.0352058), "-0,0352058")
+        self.assertEqual(M.num_csv(1.5e-7, ".9g"), "1,5e-07")
+
+    def test_lee_lo_que_exporta_la_app(self):
+        texto = "tiempo_s;ch1_V;ch2_V\n" + "".join(
+            f"{M.num_csv(k * 1e-6, '.9g')};{M.num_csv(0.5)};{M.num_csv(-k / 4)}\n" for k in range(3))
+        self.assertEqual(self._leer(texto), [0.0, -0.25, -0.5])
+
+    def test_sigue_leyendo_csv_con_punto_decimal(self):
+        self.assertEqual(self._leer("t;v\n0;1.5\n1;-2.25\n"), [1.5, -2.25])        # exportados antes
+        self.assertEqual(self._leer("t,v\n0,1.5\n1,-2.25\n"), [1.5, -2.25])        # CSV en inglés
+        self.assertEqual(self._leer("0\t1,5\n1\t-2,25\n"), [1.5, -2.25])           # tabulado
+        self.assertEqual(self._leer("1.5\n-2.25\n"), [1.5, -2.25])                 # una columna
+
+
 class TestConfig(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

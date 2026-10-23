@@ -868,7 +868,7 @@ class TabOsciloscopio(QWidget):
                 w = csv.writer(f, delimiter=";")
                 w.writerow(["tiempo_s"] + [f"ch{c}_V" for c in canales])
                 for k in range(i1 - i0):
-                    w.writerow([f"{t[k]:.9g}"] + [f"{u[c][i0 + k]:.6g}" for c in canales])
+                    w.writerow([M.num_csv(t[k], ".9g")] + [M.num_csv(u[c][i0 + k]) for c in canales])
         except OSError as e:
             self.v.estado(f"No se pudo guardar {ruta}: {e.strerror or e}", W.ERROR)
             return
