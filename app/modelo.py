@@ -432,6 +432,55 @@ def calidad_plegado(v: np.ndarray, fs: float, f: float, bins: int = 256) -> floa
     return float(np.sqrt(np.mean(residuo ** 2 * c[ok] / (c[ok] - 1))))   # corrige el sesgo del promedio
 
 
+BINS_EQ = 256                    # puntos por período del cuadro en tiempo equivalente
+MAX_PUNTOS_PANTALLA_EQ = 40000   # tope de puntos en una pantalla (unos 150 períodos)
+
+
+def umbral_repetitivo(lsb: float, vpp: float) -> float:
+    """Residuo máximo (V) para dar una señal por repetitiva: ~5 LSB de ruido más el 2 % de la amplitud."""
+    return 5 * lsb + 0.02 * vpp
+
+
+def plegar_captura(v: dict, fs: float, f0: float, ref: int, bins: int = BINS_EQ,
+                   rango_rel: float = 3e-4, puntos: int = 121) -> dict:
+    """Pliega una captura de uno o dos canales ({canal: volts}) con la frecuencia que sale de afinar f0
+    sobre el canal 'ref'. Todos los canales usan la misma frecuencia y el mismo desplazamiento de
+    alineación (arrancan en el primer flanco ascendente de 'ref'), así que la fase entre ellos se
+    conserva. Devuelve {'f', 'perfiles': {canal: perfil}, 'residuo': {canal: V rms}, 'desvio': |f/f0-1|}."""
+    f = refinar_frecuencia(v[ref], fs, f0, rango_rel, puntos)
+    perfil, _ = plegar_por_fase(v[ref], fs, f, bins)
+    perfiles = {}
+    perfiles[ref], desplazamiento = alinear_a_flanco(perfil)
+    residuos = {ref: calidad_plegado(v[ref], fs, f, bins)}
+    for c in v:
+        if c == ref:
+            continue
+        perfil, _ = plegar_por_fase(v[c], fs, f, bins)
+        perfiles[c] = np.roll(perfil, -desplazamiento)
+        residuos[c] = calidad_plegado(v[c], fs, f, bins)
+    return {"f": f, "perfiles": perfiles, "residuo": residuos, "desvio": abs(f / f0 - 1)}
+
+
+def teselar_perfiles(perfiles: dict, f: float, tdiv: float, div_x: int, pos_pct: float) -> dict:
+    """Arma un cuadro de 3 pantallas (la del medio es la visible) repitiendo el perfil de un período,
+    con el mismo formato que una captura real: fs equivalente, n, pre (índice del 0 s) y una señal
+    por canal. Lanza ValueError si en una pantalla entrarían demasiados períodos."""
+    bins = len(next(iter(perfiles.values())))
+    fs_eq = f * bins
+    n_pant = int(round(div_x * tdiv * fs_eq))
+    if n_pant > MAX_PUNTOS_PANTALLA_EQ:
+        periodos = div_x * tdiv * f
+        raise ValueError(f"con esa base de tiempo se verían {periodos:.0f} períodos; bajá el tiempo/div")
+    n_pant = max(n_pant, 2)
+    pre = int(round(n_pant * pos_pct / 100)) + n_pant
+    n = 3 * n_pant
+    idx = (np.arange(n) - pre) % bins
+    cuadro = {"fs": fs_eq, "n": n, "pre": pre, "f": f}
+    for c, p in perfiles.items():
+        cuadro[c] = p[idx]
+    return cuadro
+
+
 # ---------------------------------------------------------------------------
 # Formato de números (coma decimal)
 # ---------------------------------------------------------------------------

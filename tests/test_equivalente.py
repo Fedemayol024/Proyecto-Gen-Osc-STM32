@@ -119,6 +119,37 @@ class TestCalidad(unittest.TestCase):
         self.assertGreater(M.calidad_plegado(v, fs, f_est, BINS), 0.03)
 
 
+class TestCuadroEquivalente(unittest.TestCase):
+    def test_umbral(self):
+        self.assertAlmostEqual(M.umbral_repetitivo(0.0008, 1.0), 0.024)
+
+    def test_teselar_da_un_cuadro_con_formato_de_captura(self):
+        perfil = np.arange(256, dtype=float)
+        c = M.teselar_perfiles({1: perfil}, 1e6, 1e-6, 10, 50)     # 10 períodos por pantalla
+        n_pant = 2560
+        self.assertAlmostEqual(c["fs"], 256e6)
+        self.assertEqual(c["n"], 3 * n_pant)
+        self.assertEqual(c["pre"], 1280 + n_pant)
+        self.assertEqual(c[1][c["pre"]], 0.0)                      # el 0 s cae en el primer punto del perfil
+        self.assertEqual(c[1][c["pre"] + 5], 5.0)
+        self.assertEqual(c[1][c["pre"] + 256], 0.0)                # y se repite cada período
+
+    def test_teselar_rechaza_demasiados_periodos(self):
+        with self.assertRaises(ValueError):
+            M.teselar_perfiles({1: np.zeros(256)}, 1e6, 1e-3, 10, 50)
+
+    def test_dos_canales_conservan_la_fase(self):
+        f, arr = 1.2345678e6, 137
+        fs = M.fs_para_arr(arr)
+        t = np.arange(N) / fs
+        v1, v2 = onda(t, f), onda(t - 0.25 / f, f)                 # CH2 atrasado 90°
+        res = M.plegar_captura({1: v1, 2: v2}, fs, f * (1 + 1e-4), ref=1)
+        a, b = np.fft.rfft(res["perfiles"][1])[1], np.fft.rfft(res["perfiles"][2])[1]
+        desfase = (np.angle(b) - np.angle(a) + np.pi) % (2 * np.pi) - np.pi
+        self.assertAlmostEqual(float(desfase), -np.pi / 2, delta=0.05)
+        self.assertLess(abs(res["f"] - f) / f, 1e-6)
+
+
 class TestAlineacion(unittest.TestCase):
     def test_arranca_en_el_flanco_ascendente(self):
         x = np.sin(2 * np.pi * (np.arange(256) + 40.3) / 256)
