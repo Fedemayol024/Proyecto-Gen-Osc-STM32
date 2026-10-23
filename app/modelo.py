@@ -296,13 +296,47 @@ def suavizar(v: np.ndarray, ventana: int) -> np.ndarray:
     return np.convolve(relleno, np.ones(ventana) / ventana, mode="valid")
 
 
-def ajuste_seno(v: np.ndarray, fs: float, f: float) -> tuple[float, float, float]:
-    """Ajuste por mínimos cuadrados a A·sen(2πft + φ) + C. Devuelve (A, φ en rad, C)."""
+def fasor_seno(v: np.ndarray, fs: float, f: float) -> tuple[complex, float]:
+    """Ajuste por mínimos cuadrados a A·sen(2πft + φ) + C.
+    Devuelve (A·e^jφ, residuo eficaz del ajuste)."""
     t = np.arange(len(v)) / fs
     w = 2 * np.pi * f * t
     m = np.column_stack([np.sin(w), np.cos(w), np.ones_like(w)])
-    (a, b, c), *_ = np.linalg.lstsq(m, v, rcond=None)
-    return float(math.hypot(a, b)), float(math.atan2(b, a)), float(c)
+    coef, *_ = np.linalg.lstsq(m, v, rcond=None)
+    residuo = float(np.sqrt(np.mean((v - m @ coef) ** 2)))
+    return complex(coef[0], coef[1]), residuo
+
+
+# ---------------------------------------------------------------------------
+# Bode: largo de cada captura y promedio de las que hagan falta
+# ---------------------------------------------------------------------------
+# El ruido de la amplitud y la fase ajustadas baja con la raíz del número de muestras, así
+# que conviene la captura más larga posible sin que el barrido se haga eterno.
+BODE_T_CAPTURA = 0.2       # s de captura buscados por punto (al menos 8 períodos)
+BODE_T_PUNTO = 2.0         # s máximos por punto sumando las repeticiones
+BODE_FASE_OBJ = math.radians(1.0)
+BODE_REP_MAX = 16
+
+
+def captura_bode(f: float, fs_max: float, ventana: int = 8192,
+                 t_obj: float = BODE_T_CAPTURA) -> tuple[int, float]:
+    """(n, fs) de la captura para un punto del barrido: al menos 50 muestras por período
+    y 8 períodos, y la ventana completa siempre que no tarde más de 't_obj'."""
+    t = max(8.0 / f, t_obj)
+    fs = min(fs_max, max(50.0 * f, ventana / t))
+    n = int(min(ventana, max(400, round(t * fs))))
+    return n, fs
+
+
+def repeticiones_bode(amp: float, residuo: float, n: int, t_captura: float,
+                      fase_obj: float = BODE_FASE_OBJ, maximo: int = BODE_REP_MAX,
+                      t_punto: float = BODE_T_PUNTO) -> int:
+    """Capturas a promediar para que la incertidumbre de la fase quede en 'fase_obj'.
+    Con ruido blanco de valor eficaz 'residuo', la del ajuste es residuo·√(2/n)/amp."""
+    incert = residuo * math.sqrt(2.0 / max(n, 1)) / max(amp, 1e-12)
+    k = math.ceil((incert / fase_obj) ** 2)
+    tope = max(1, int(t_punto // max(t_captura, 1e-9)))
+    return int(min(maximo, tope, max(1, k)))
 
 
 def espectro(v: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray]:

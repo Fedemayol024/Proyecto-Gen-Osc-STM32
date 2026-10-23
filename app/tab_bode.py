@@ -151,16 +151,16 @@ class TabBode(QWidget):
         fs_gen = self.v.disp.info.get("gen_fs", 1e6)
         inc = round(f / fs_gen * 2 ** 32)
         self.f_real = inc * fs_gen / 2 ** 32
+        self.acum = []               # (H = salida/entrada, amplitud de entrada) de cada captura
+        self.rep = 1
         self.lbl_prog.setText(f"Punto {self.idx + 1} de {len(self.frecs)}: {M.si(f, 'Hz')}")
         # esperar que el circuito llegue al régimen permanente
         self.espera.start(int(max(60, 8000 / f)))
 
     def _capturar(self):
-        f = self.f_real
         fsmax = self.v.disp.info.get("osc_fsmax", 1.6e6)
-        fs = min(fsmax, 50 * f)
-        periodos = max(8.0, 400 * f / fs)
-        n = int(min(8192, max(400, round(periodos * fs / f))))
+        ventana = int(self.v.disp.info.get("ventana", 8192))
+        n, fs = M.captura_bode(self.f_real, fsmax, ventana)
         self.v.pedir_captura("bode", n, 0, fs)
         self.esperando = True
         self.t_pedido = time.monotonic()
@@ -177,14 +177,28 @@ class TabBode(QWidget):
         osc = self.v.tab_osc
         v1 = osc.recta(1).volt(d["ch1"]) * osc.canales[1].factor
         v2 = osc.recta(2).volt(d["ch2"]) * osc.canales[2].factor
-        a1, f1, _ = M.ajuste_seno(v1, d["fs"], self.f_real)
-        a2, f2, _ = M.ajuste_seno(v2, d["fs"], self.f_real)
+        x1, _ = M.fasor_seno(v1, d["fs"], self.f_real)
+        x2, r2 = M.fasor_seno(v2, d["fs"], self.f_real)
+        a1 = abs(x1)
         if a1 < 1e-4:
             self._terminar("No llega señal a la entrada CH1: revisá la conexión del generador.")
             return
-        g = 20 * math.log10(max(a2, 1e-9) / a1)
-        fase = math.degrees(f2 - f1)
-        fase = (fase + 180) % 360 - 180
+        # Se promedia H complejo (no el módulo): el ruido se cancela en vez de sumar amplitud.
+        # La fase de CH1 de cada captura hace de referencia, así no importa dónde arrancó.
+        self.acum.append((x2 / x1, a1))
+        if len(self.acum) == 1:
+            self.rep = M.repeticiones_bode(abs(x2), r2, d["n"], d["n"] / d["fs"])
+        if len(self.acum) < self.rep:
+            self.lbl_prog.setText(f"Punto {self.idx + 1} de {len(self.frecs)}: "
+                                  f"{M.si(self.f_real, 'Hz')} · salida chica, promediando "
+                                  f"{len(self.acum) + 1} de {self.rep}")
+            self._capturar()
+            return
+        h = complex(np.mean([h for h, _ in self.acum]))
+        a1 = float(np.mean([a for _, a in self.acum]))
+        a2 = abs(h) * a1
+        g = 20 * math.log10(max(abs(h), 1e-9))
+        fase = math.degrees(math.atan2(h.imag, h.real))
         if self.resultados:          # continuidad de la fase (sin saltos de 360°)
             ant = self.resultados[-1][2]
             while fase - ant > 180:
