@@ -8,6 +8,7 @@ Crear .exe: build_exe.bat
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
@@ -196,8 +197,13 @@ class Ventana(QMainWindow):
         self._escala_cambiada()
 
         self.disp.conectado.connect(self._al_conectar)
-        self.disp.desconectado.connect(lambda m: self._al_desconectar(m, W.ERROR))
-        self.disp.error.connect(lambda m: self._al_desconectar(m, W.ERROR))
+        self.disp.desconectado.connect(self._perdida_conexion)
+        self.disp.error.connect(self._error_conexion)
+        # Reconexión automática: si la placa se reinicia (watchdog, RESET, cable flojo) el puerto
+        # USB desaparece y vuelve a aparecer; la app lo busca un rato y se reconecta sola.
+        self._reconexion = None
+        self._t_recon = QTimer(self)
+        self._t_recon.timeout.connect(self._intentar_reconexion)
         self.disp.linea.connect(self._al_linea)
         self.disp.datos.connect(self._al_datos)
 
@@ -296,7 +302,52 @@ class Ventana(QMainWindow):
                 self.combo_puertos.setCurrentText(et)
                 break
 
+    # -------------------------------------------------------------- reconexión
+    RECONEXION_S = 20.0
+
+    def _perdida_conexion(self, motivo: str):
+        puerto = self._reconexion["puerto"] if self._reconexion else self.config.puerto
+        self._al_desconectar(f"{motivo} Reintentando conectar…", W.ALERTA)
+        if puerto:
+            self._reconexion = {"puerto": puerto, "hasta": time.monotonic() + self.RECONEXION_S,
+                                "intentando": False}
+            self.btn_con.setText("Cancelar")
+            self.lbl_con.setText(f"● Reconectando con {puerto}…")
+            self.lbl_con.setStyleSheet(f"color: {W.ALERTA};")
+            self._t_recon.start(1000)
+
+    def _error_conexion(self, motivo: str):
+        if self._reconexion:                 # durante la reconexión los fallos son esperables
+            self._reconexion["intentando"] = False
+            return
+        self._al_desconectar(motivo, W.ERROR)
+
+    def _cancelar_reconexion(self):
+        self._t_recon.stop()
+        self._reconexion = None
+
+    def _intentar_reconexion(self):
+        r = self._reconexion
+        if not r:
+            self._t_recon.stop()
+            return
+        if self.disp.esta_conectado or r["intentando"]:
+            return
+        if time.monotonic() > r["hasta"]:
+            self._cancelar_reconexion()
+            self._al_desconectar("No se pudo reconectar con la placa. Revisá el cable USB USER y "
+                                 "tocá Conectar.", W.ERROR)
+            return
+        if r["puerto"] in [dev for dev, _ in listar_puertos()]:
+            r["intentando"] = True
+            self.disp.abrir(r["puerto"])
+
     def alternar_conexion(self):
+        if self._reconexion:                 # el botón dice «Cancelar»
+            self._cancelar_reconexion()
+            self.disp.cerrar()
+            self._al_desconectar("Reconexión cancelada.", W.TENUE)
+            return
         if self.disp.esta_conectado:
             self.disp.cerrar()
             self._al_desconectar("Desconectado.", W.TENUE)
@@ -327,6 +378,8 @@ class Ventana(QMainWindow):
                 if r == QMessageBox.Yes:
                     self.cambiar_placa(detectada, puerto)
             return
+        reconectado = self._reconexion is not None
+        self._cancelar_reconexion()
         self.config.puerto = self.disp.puerto
         self.btn_con.setEnabled(True)
         self.btn_con.setText("Desconectar")
@@ -335,11 +388,17 @@ class Ventana(QMainWindow):
                              f"generador {M.si(info.get('gen_fs', 0), 'S/s', 3)} · "
                              f"osciloscopio hasta {M.si(info.get('osc_fsmax', 0), 'S/s', 3)}")
         self.lbl_con.setStyleSheet(f"color: {W.OK};")
-        self.estado("Instrumento conectado.", W.OK)
         self.tab_gen.reenviar_todo()
         self.tab_osc.al_conectar()
         self.tab_placa.al_conectar()
         self.guardar_config_pronto()
+        if info.get("reinicio") == "watchdog":
+            self.estado("Atención: la placa se reinició sola porque el firmware se había colgado "
+                        "(watchdog). Se volvió a enviar la configuración.", W.ALERTA)
+        elif reconectado:
+            self.estado("Reconectado automáticamente. Se volvió a enviar la configuración.", W.OK)
+        else:
+            self.estado("Instrumento conectado.", W.OK)
 
     def _al_desconectar(self, motivo: str, color: str):
         self.btn_con.setEnabled(True)

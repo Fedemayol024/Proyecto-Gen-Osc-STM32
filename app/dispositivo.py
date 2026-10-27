@@ -132,7 +132,7 @@ class Dispositivo(QObject):
                                 try:
                                     info[k] = float(v)
                                 except ValueError:
-                                    pass
+                                    info[k] = v          # texto (p. ej. reinicio=watchdog)
         except Exception as e:  # noqa: BLE001
             ser.close()
             self.error.emit(f"Error de comunicación: {e}")

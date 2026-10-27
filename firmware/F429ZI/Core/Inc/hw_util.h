@@ -34,4 +34,14 @@ int    leer_double(const char *s, double *v);
 /* Escribe v con 'dec' decimales en buf; devuelve la cantidad de caracteres. */
 int    fmt_double(char *buf, size_t n, double v, int dec);
 
+/* Watchdog independiente (IWDG): si el lazo principal deja de llamar a
+ * wdg_patear() durante WDG_MS, el micro se reinicia solo. Se congela mientras
+ * el depurador tiene el micro detenido (breakpoints de CubeIDE). */
+#define WDG_MS           2000u
+void        wdg_iniciar(uint32_t ms);
+void        wdg_patear(void);
+/* Causa del último reinicio, leída al arrancar: "watchdog", "energia",
+ * "boton", "software" u "otro". */
+const char *causa_reinicio(void);
+
 #endif

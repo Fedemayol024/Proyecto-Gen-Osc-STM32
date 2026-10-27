@@ -9,7 +9,8 @@
  *
  * Comandos (ver también LEEME.md):
  *   ID?                         -> INSTR-F767 v1.0  (o INSTR-F429 v1.0)
- *   INFO?                       -> INFO gen_fs=.. osc_fsmax=.. tabla=4096 ventana=8192
+ *   INFO?                       -> INFO gen_fs=.. osc_fsmax=.. tabla=4096 ventana=8192 ..
+ *                                  reinicio=watchdog|energia|boton|software|otro
  *   GTBL c n suma  + 2n bytes   -> OK GTBL c        (tabla de c = 1|2, uint16 LE)
  *   GSET c frec fase hab reposo -> OK GSET c frec_real
  *   GMOD c NO|AM|FM p fmod centro -> OK GMOD c fmod_real
@@ -208,8 +209,9 @@ static void cmd_info(void)
   char a[24], b[24];
   fmt_double(a, sizeof a, gen_fs(), 3);
   fmt_double(b, sizeof b, osc_fs_max(), 3);
-  responder("INFO gen_fs=%s osc_fsmax=%s tabla=%u ventana=%u cpu=%lu", a, b,
-            (unsigned)GEN_TABLA_N, (unsigned)OSC_MAX_VENTANA, (unsigned long)SystemCoreClock);
+  responder("INFO gen_fs=%s osc_fsmax=%s tabla=%u ventana=%u cpu=%lu wdg_ms=%lu reinicio=%s", a, b,
+            (unsigned)GEN_TABLA_N, (unsigned)OSC_MAX_VENTANA, (unsigned long)SystemCoreClock,
+            (unsigned long)WDG_MS, causa_reinicio());
 }
 
 static void procesar_linea(char *l)
@@ -419,11 +421,16 @@ void instrumento_iniciar(void)
   osc_iniciar();
   fcnt_iniciar();
   pwm_iniciar();
+
+  /* Último: si algo de lo anterior se colgara, no hay watchdog todavía y se ve
+   * en el depurador; desde acá, un cuelgue reinicia la placa sola. */
+  wdg_iniciar(WDG_MS);
 }
 
 void instrumento_lazo(void)
 {
   static uint32_t t_led = 0;
+  wdg_patear();                          /* el lazo sigue vivo */
   if (HAL_GetTick() - t_led >= 250u) {   /* LD2 azul: latido */
     t_led = HAL_GetTick();
     GPIOB->ODR ^= (1u << 7);

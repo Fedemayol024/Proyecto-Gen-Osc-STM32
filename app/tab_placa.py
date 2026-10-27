@@ -118,6 +118,20 @@ def _pin_color(nombre: str):
 # ---------------------------------------------------------------------------
 # Dibujo de la placa
 # ---------------------------------------------------------------------------
+CAUSAS_REINICIO = {"watchdog": "el watchdog (se había colgado)", "energia": "encendido",
+                   "boton": "botón RESET o programador", "software": "pedido por software"}
+
+
+def texto_watchdog(info: dict) -> str:
+    """Parte del texto «en vivo» sobre el watchdog (firmware con watchdog)."""
+    if "wdg_ms" not in info:
+        return " · <span style='color:%s'>firmware sin watchdog</span>" % W.ALERTA
+    causa = CAUSAS_REINICIO.get(str(info.get("reinicio", "")), "otro")
+    color = W.ALERTA if info.get("reinicio") == "watchdog" else W.TENUE
+    return (f" · watchdog {M.si(float(info['wdg_ms']) / 1000, 's', 2)} · "
+            f"<span style='color:{color}'>último reinicio: {causa}</span>")
+
+
 class DibujoPlaca(QWidget):
     """Vista superior esquemática (no a escala) de una Nucleo-144, con el ST-LINK arriba."""
 
@@ -561,7 +575,7 @@ class TabPlaca(QWidget):
                 f"<span style='color:{W.OK}'>● Medido en la placa conectada:</span> generador "
                 f"{M.si(i.get('gen_fs', 0), 'S/s', 4)} · osciloscopio hasta "
                 f"{M.si(i.get('osc_fsmax', 0), 'S/s', 4)} · ventana {int(i.get('ventana', 0))} puntos · "
-                f"CPU {M.si(i.get('cpu', 0), 'Hz', 3)}")
+                f"CPU {M.si(i.get('cpu', 0), 'Hz', 3)}" + texto_watchdog(i))
         else:
             self.lbl_vivo.setText("Valores de referencia. Al conectar la placa se muestran los "
                                   "medidos en ella.")

@@ -169,7 +169,7 @@ while True:
             if cmd == "ID?":
                 resp(f"INSTR-{PLACA} v1.0")
             elif cmd == "INFO?":
-                resp(f"INFO gen_fs={FS_GEN:.3f} osc_fsmax={FSMAX:.3f} tabla=4096 ventana=8192 cpu={CPU}")
+                resp(f"INFO gen_fs={FS_GEN:.3f} osc_fsmax={FSMAX:.3f} tabla=4096 ventana=8192 cpu={CPU} wdg_ms=2000 reinicio=energia")
             elif cmd == "GTBL":
                 bin_pend = (int(p[1]), int(p[2]), int(p[3]))
             elif cmd == "GSET":

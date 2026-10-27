@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
@@ -247,6 +248,49 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         self.v.aplicar_zoom()
         self.assertEqual(scroll.width(), ancho)
         self.assertEqual(M.zoom_guardado(), 1.0)
+
+    # --------------------------------------------------------------- reconexión / watchdog
+    def test_reconexion_automatica_tras_un_reinicio(self):
+        abiertos = []
+        self.v.disp.abrir = lambda puerto: abiertos.append(puerto)
+        self.v.config.puerto = "COM7"
+        A.listar_puertos = lambda: []                       # la placa se está reiniciando
+        self.v._perdida_conexion("Se perdió la conexión.")
+        self.assertEqual(self.v.btn_con.text(), "Cancelar")
+        self.v._intentar_reconexion()
+        self.assertEqual(abiertos, [])                      # el puerto todavía no volvió
+        A.listar_puertos = lambda: [("COM7", "Instrumento (USB del Nucleo)")]
+        self.v._intentar_reconexion()
+        self.assertEqual(abiertos, ["COM7"])
+        self.v._error_conexion("no respondió")             # un intento fallido no corta la reconexión
+        self.assertIsNotNone(self.v._reconexion)
+        # vuelve: la placa avisa que se reinició por el watchdog
+        self.v.disp.info = {"gen_fs": 1e6, "osc_fsmax": 1.59e6, "wdg_ms": 2000.0, "reinicio": "watchdog"}
+        self.v.disp.placa, self.v.disp.puerto = "F767", "COM7"
+        enviados = []
+        self.v.disp.enviar = lambda t: enviados.append(t) or True
+        self.v.disp.enviar_tabla = lambda *a: True
+        with mock.patch.object(type(self.v.disp), "esta_conectado", new_callable=mock.PropertyMock,
+                               return_value=True):
+            self.v._al_conectar("1.0")
+        self.assertIsNone(self.v._reconexion)
+        self.assertIn("watchdog", self.v.statusBar().currentMessage())
+        self.assertTrue(any(e.startswith("GSET") for e in enviados))   # se reenvió el generador
+        self.assertIn("watchdog", self.v.tab_placa.lbl_vivo.text())
+
+    def test_reconexion_se_rinde_y_se_puede_cancelar(self):
+        self.v.disp.abrir = lambda puerto: None
+        self.v.config.puerto = "COM7"
+        A.listar_puertos = lambda: []
+        self.v._perdida_conexion("Se perdió la conexión.")
+        self.v.alternar_conexion()                          # «Cancelar»
+        self.assertIsNone(self.v._reconexion)
+        self.assertEqual(self.v.btn_con.text(), "Conectar")
+        self.v._perdida_conexion("Se perdió la conexión.")
+        self.v._reconexion["hasta"] = 0
+        self.v._intentar_reconexion()
+        self.assertIsNone(self.v._reconexion)
+        self.assertIn("No se pudo reconectar", self.v.statusBar().currentMessage())
 
     def test_sin_canales_visibles_no_exporta(self):
         self.osc._mostrar(self._cuadro())

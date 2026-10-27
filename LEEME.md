@@ -108,7 +108,8 @@ Opcional, pero recomendado para que Windows lea bien la configuración del puert
 ### 1.6 Compilar y cargar
 1. Compilá (martillo) y cargá con *Run* usando el USB del **ST-LINK** (CN1, el de arriba).
 2. Conectá **un segundo cable** al USB **USER** (CN13, abajo, al lado del Ethernet). Windows va a mostrar un nuevo "Dispositivo serie USB (COMx)". Ese es el puerto del instrumento.
-3. El LED verde LD1 parpadea con cada captura del osciloscopio.
+3. El LED azul LD2 parpadea (4 veces por segundo) mientras el programa está corriendo. Los LED verde y rojo quedan apagados.
+4. **Watchdog:** el firmware arranca el watchdog independiente (IWDG) con 2 s. Si el programa se colgara, la placa se reinicia sola y la app se reconecta y avisa. Mientras depurás en CubeIDE y frenás en un breakpoint, el watchdog queda congelado, así que no reinicia. No hace falta activar nada en el `.ioc`: se configura desde el código.
 
 ---
 
@@ -207,7 +208,7 @@ Son líneas de texto terminadas en `\n`.
 
 | Comando | Respuesta |
 |---|---|
-| `ID?` / `INFO?` | `INSTR-F767 v1.0` / `INFO gen_fs=… osc_fsmax=…` |
+| `ID?` / `INFO?` | `INSTR-F767 v1.0` / `INFO gen_fs=… osc_fsmax=… wdg_ms=2000 reinicio=watchdog\|energia\|boton\|software\|otro` |
 | `GTBL c 4096 suma` + 8192 bytes | `OK GTBL c` (tabla uint16 little-endian; la suma es la de los códigos) |
 | `GSET c frec fase hab reposo` | `OK GSET c frec_real` |
 | `GMOD c NO\|AM\|FM p fmod centro` | `OK GMOD c fmod_real` |
@@ -219,6 +220,7 @@ Son líneas de texto terminadas en `\n`.
 | `PWM frec ciclo tm_ns hab` | `OK PWM frec_real ciclo_real tm_real` |
 
 ## 5. Límites y consejos
+- **Si la placa se cuelga o se reinicia:** el watchdog la reinicia sola en 2 s. La app detecta que se cortó el USB, la busca durante 20 s, se reconecta, vuelve a mandar la configuración del generador y avisa en la barra de estado si el reinicio fue por el watchdog. En la pestaña **Placa** se ve la causa del último reinicio. Durante la reconexión el botón dice *Cancelar*.
 - **Rangos de los pines directos:** las entradas del ADC aceptan **solo 0 a 3,3 V**. Para cualquier otra señal usá la etapa de entrada.
 - **Ancho de banda:** el osciloscopio llega a ~1,6 MS/s, así que hasta ~150–200 kHz se ven bien. El generador, hasta ~100 kHz.
 - **Bode:** queda bien de unos pocos Hz hasta ~100 kHz. Las frecuencias bajas tardan más, porque espera el régimen permanente y captura al menos 8 períodos.

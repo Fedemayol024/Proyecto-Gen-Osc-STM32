@@ -110,3 +110,48 @@ int fmt_double(char *buf, size_t n, double v, int dec)
   if (dec == 0) return snprintf(buf, n, "%s%lu", signo, ent);
   return snprintf(buf, n, "%s%lu.%0*lu", signo, ent, dec, (unsigned long)frac);
 }
+
+/* ------------------------------------------------------------------------ */
+/* Watchdog independiente y causa del reinicio                              */
+/* ------------------------------------------------------------------------ */
+static const char *causa = "otro";
+
+static void leer_causa(void)
+{
+  uint32_t csr = RCC->CSR;
+  if (csr & RCC_CSR_IWDGRSTF)                         causa = "watchdog";
+  else if (csr & RCC_CSR_WWDGRSTF)                    causa = "watchdog";
+  else if (csr & RCC_CSR_SFTRSTF)                     causa = "software";
+  else if (csr & (RCC_CSR_PORRSTF | RCC_CSR_BORRSTF)) causa = "energia";
+  else if (csr & RCC_CSR_PINRSTF)                     causa = "boton";      /* RESET o el ST-LINK */
+  else                                                causa = "otro";
+  RCC->CSR |= RCC_CSR_RMVF;                           /* borrar para el próximo arranque */
+}
+
+const char *causa_reinicio(void)
+{
+  return causa;
+}
+
+void wdg_iniciar(uint32_t ms)
+{
+  leer_causa();
+#if defined(DBGMCU_APB1_FZ_DBG_IWDG_STOP)
+  DBGMCU->APB1FZ |= DBGMCU_APB1_FZ_DBG_IWDG_STOP;     /* no reiniciar en un breakpoint */
+#endif
+  /* LSI ~32 kHz / 64 = 500 Hz -> 2 ms por cuenta; 12 bits: hasta ~8 s */
+  uint32_t rl = ms / 2u;
+  if (rl < 1u) rl = 1u;
+  if (rl > 0xFFFu) rl = 0xFFFu;
+  IWDG->KR = 0xCCCCu;                                  /* arranca (enciende el LSI) */
+  IWDG->KR = 0x5555u;                                  /* habilita escribir PR y RLR */
+  IWDG->PR = 4u;                                       /* /64 */
+  IWDG->RLR = rl;
+  for (uint32_t t = 1000000u; IWDG->SR && t; t--) { }  /* esperar que se carguen */
+  IWDG->KR = 0xAAAAu;
+}
+
+void wdg_patear(void)
+{
+  IWDG->KR = 0xAAAAu;
+}
