@@ -287,7 +287,6 @@ class Ventana(QMainWindow):
             self.estado(f"La placa respondió: {linea}", W.ERROR)
         self.tab_gen.al_linea(linea)
         self.tab_herr.al_linea(linea)
-        self.tab_osc.al_linea(linea)
 
     def pedir_captura(self, dueno: str, n: int, pre: int, fs: float, fuente: int = 0,
                       nivel: int = 2048, flanco: int = 0, hist: int = 20):

@@ -25,8 +25,6 @@ COLORES = {1: W.CH1, 2: W.CH2}
 # Más lento, el cuadro tardaría demasiado en llegar (la placa además busca el disparo en 2
 # capturas más, así que una captura de 3 pantallas cuesta 9 pantallas de tiempo).
 TDIV_DESPLAZ_MAX = 2e-3
-FCNT_MS_EQ = 100        # compuerta del frecuencímetro al medir la señal en tiempo equivalente
-FREC_MIN_EQ = 400.0     # por debajo, 8192 muestras no alcanzan a tener 2 períodos
 
 
 def curva_rapida(plot, color, ancho=1.0):
@@ -157,17 +155,6 @@ class TabOsciloscopio(QWidget):
         self._fps_t = time.monotonic()
         self._fps_n = 0
         self.fps = 0.0
-        # tiempo equivalente
-        self.ets = None             # perfiles plegados y frecuencia del último cuadro bueno
-        self.ets_estado = None      # None | "freq" (esperando al frecuencímetro) | "cap" (esperando la captura)
-        self.ets_f0 = None          # frecuencia de la señal (Hz); None = hay que medirla
-        self.ets_afinada = False    # f0 ya viene de afinar un cuadro (búsqueda más angosta)
-        self.ets_fallos = 0
-        self.ets_arr = None
-        # reloj de TIM8 (fija el muestreo): 216 MHz en la F767, 168 MHz en la F429. Igual se corrige
-        # con la frecuencia de muestreo real que informa la placa después de la primera captura.
-        self.ets_tclk = 168e6 if getattr(ventana, "placa", "F767") == "F429" else M.TCLK_TIMER
-
         raiz = QHBoxLayout(self)
         raiz.setContentsMargins(8, 8, 8, 8)
 
@@ -305,17 +292,6 @@ class TabOsciloscopio(QWidget):
         self.desplaz.setRange(-100, 100)          # décimas de división: ±10 div
         self.desplaz.setValue(int(cfg.get("desplaz", 0)))
         self.desplaz.valueChanged.connect(self._cambio)
-        self.adquisicion = W.combo(["Tiempo real", "Tiempo equivalente"])
-        self.adquisicion.setCurrentIndex(int(cfg.get("adquisicion", 0)))
-        self.adquisicion.currentIndexChanged.connect(self._cambio_adquisicion)
-        self.lbl_eq = W.etiqueta_tenue("Para señales repetitivas y estables: conectá la misma señal al canal y a "
-                                       "PA0 (frecuencímetro). El ancho de banda lo limita el frontal analógico.")
-        self.lbl_eq.setWordWrap(True)
-        self.lbl_eq.setVisible(self.modo_eq)
-        lay.addWidget(W.fila("Adquisición", self.adquisicion,
-                             ayuda="Tiempo real: cualquier señal, con disparo y eventos únicos. Tiempo equivalente: "
-                                   "reconstruye un período de una señal repetitiva a partir de una captura larga."))
-        lay.addWidget(self.lbl_eq)
         lay.addWidget(W.fila("Tiempo", self.tdiv))
         lay.addWidget(W.fila("Posición disparo", self.pos_disp))
         lay.addWidget(W.fila("Desplazar", self.desplaz,
@@ -377,16 +353,11 @@ class TabOsciloscopio(QWidget):
                 "fuente": self.fuente.currentText(), "flanco": self.flanco.currentText(),
                 "modo": self.modo.currentText(), "nivel": self.nivel.valor(),
                 "suavizado": self.suavizado.currentIndex(), "desplaz": self.desplaz.value(),
-                "adquisicion": self.adquisicion.currentIndex(),
                 "ch1": self.canales[1].estado(), "ch2": self.canales[2].estado()}
 
     @property
     def t_div(self) -> float:
         return TDIVS[self.tdiv.currentIndex()]
-
-    @property
-    def modo_eq(self) -> bool:
-        return self.adquisicion.currentIndex() == 1
 
     def recta(self, c: int) -> M.Recta:
         return self.v.config.recta_entrada(c, self.canales[c].clave_entrada)
@@ -396,7 +367,7 @@ class TabOsciloscopio(QWidget):
     def desplazamiento(self) -> float:
         """Desplazamiento horizontal en divisiones. Solo existe con las bases de tiempo
         que capturan pantallas extra; con las lentas se ignora."""
-        if self.modo_eq or self.t_div <= TDIV_DESPLAZ_MAX:
+        if self.t_div <= TDIV_DESPLAZ_MAX:
             return self.desplaz.value() / 10.0
         return 0.0
 
@@ -457,126 +428,12 @@ class TabOsciloscopio(QWidget):
     def pedir(self):
         if not self.v.disp.esta_conectado:
             return
-        if self.modo_eq:
-            self._pedir_eq()
-            return
         n, pre, fs, fuente, nivel, flanco = self.parametros_captura()
         self.v.pedir_captura("osc", n, pre, fs, fuente, nivel, flanco, 20)
         self.esperando = True
         self.t_pedido = time.monotonic()
         total = n * (3 if fuente else 1)
         self.timeout = total / fs + 1.5
-
-    # ------------------------------------------------------------ tiempo equivalente
-    def _reiniciar_eq(self):
-        self.ets, self.ets_estado, self.ets_f0 = None, None, None
-        self.ets_afinada, self.ets_fallos = False, 0
-
-    def _pedir_eq(self):
-        """Paso 1: la frecuencia de la señal, con el frecuencímetro (PA0). Paso 2: una captura larga,
-        sin disparo, con el ARR del timer que mejor reparte las fases."""
-        self.esperando = True
-        self.t_pedido = time.monotonic()
-        if self.ets_f0 is None:
-            self.ets_estado = "freq"
-            self.v.disp.enviar(f"FCNT {FCNT_MS_EQ} 0")
-            self.timeout = FCNT_MS_EQ / 1000 + 2.0
-            self.v.estado("Tiempo equivalente: midiendo la frecuencia en PA0…", W.TEXTO)
-            return
-        fsmax = self.v.disp.info.get("osc_fsmax", 1.6e6)
-        self.ets_arr, _ = M.elegir_arr(self.ets_f0, fsmax, 8192, M.BINS_EQ, self.ets_tclk)
-        fs = M.fs_para_arr(self.ets_arr, self.ets_tclk)
-        self.ets_estado = "cap"
-        self.v.pedir_captura("osc", 8192, 0, fs, 0, 2048, 0, 20)
-        self.timeout = 8192 / fs + 1.5
-
-    def al_linea(self, linea: str):
-        """Respuesta del frecuencímetro ('FREQ f método flancos ms') cuando se está midiendo la señal."""
-        if self.ets_estado != "freq" or not linea.startswith("FREQ "):
-            return
-        try:
-            f = float(linea.split()[1])
-        except (IndexError, ValueError):
-            return
-        self.ets_estado = None
-        if f < FREC_MIN_EQ:
-            self.v.estado("Tiempo equivalente: no hay señal en PA0 (conectá la misma señal al frecuencímetro) "
-                          f"o es de menos de {FREC_MIN_EQ:.0f} Hz.", W.ALERTA)
-            self.esperando, self.t_pedido, self.timeout = True, time.monotonic(), 1.0    # el vigía reintenta
-            return
-        self.ets_f0, self.ets_afinada = f, False
-        if self.corriendo:
-            self._pedir_eq()
-        else:
-            self.esperando = False
-
-    def _procesar_eq(self, d: dict) -> bool:
-        """Pliega una captura larga y arma el cuadro. Devuelve False si la señal no sirve para este modo."""
-        u = self._a_volts(d, suavizar=False)            # promediar antes de plegar arruinaría el pliegue
-        fs = u["fs"]
-        if self.ets_arr:
-            self.ets_tclk = fs * self.ets_arr           # reloj real del timer (PSC = 1)
-        visibles = [c for c in (1, 2) if self.canales[c].visible.isChecked()] or [1]
-        ref = {"CH1": 1, "CH2": 2}.get(self.fuente.currentText(), visibles[0])
-        if ref not in visibles:
-            ref = visibles[0]
-        rango, puntos = (3e-5, 41) if self.ets_afinada else (3e-4, 121)
-        res = M.plegar_captura({1: u[1], 2: u[2]}, fs, self.ets_f0, ref, M.BINS_EQ, rango, puntos)
-
-        def umbral(c):
-            lsb = abs(self.recta(c).pendiente) * self.canales[c].factor
-            return M.umbral_repetitivo(lsb, float(np.ptp(u[c])))
-
-        fuera = res["desvio"] > 0.9 * rango             # el máximo quedó en el borde: f0 estaba lejos
-        if fuera or res["residuo"][ref] > umbral(ref):
-            self.ets_fallos += 1
-            self.ets_afinada = False
-            if fuera or self.ets_fallos >= 2:
-                self.ets_f0 = None                      # volver a medir con el frecuencímetro
-            self.v.estado("Tiempo equivalente: la señal no es repetitiva o es inestable (probá en Tiempo real).",
-                          W.ALERTA)
-            return False
-        self.ets_fallos = 0
-        self.ets_f0, self.ets_afinada = res["f"], True
-        perfiles, avisos = dict(res["perfiles"]), []
-        for c in visibles:
-            if c != ref and res["residuo"][c] > umbral(c):
-                perfiles[c] = np.full(M.BINS_EQ, float(u[c].mean()))
-                avisos.append(f"CH{c} no repite a la frecuencia de CH{ref}")
-        self.ets = {"f": res["f"], "perfiles": perfiles}
-        if avisos:
-            self.v.estado("Tiempo equivalente: " + "; ".join(avisos) + ".", W.ALERTA)
-        else:
-            self.v.estado(f"Tiempo equivalente: señal de {M.si(res['f'], 'Hz', 7)} reconstruida.", W.OK)
-        return self._cuadro_eq()
-
-    def _cuadro_eq(self) -> bool:
-        """Arma el cuadro que se dibuja a partir del perfil plegado y la escala de tiempo actual."""
-        if not self.ets:
-            return False
-        try:
-            cuadro = M.teselar_perfiles(self.ets["perfiles"], self.ets["f"], self.t_div, DIV_X,
-                                        self.pos_disp.value())
-        except ValueError as e:
-            self.ultimo = None
-            for c in (1, 2):
-                self.curvas[c].setData([], [])
-            self.v.estado(f"Tiempo equivalente: {e}.", W.ALERTA)
-            return False
-        cuadro.update({"disparado": 1, "ets": True})
-        self.ultimo = cuadro
-        return True
-
-    def _cambio_adquisicion(self, *_):
-        self._reiniciar_eq()
-        self.ultimo = None
-        for c in (1, 2):
-            self.curvas[c].setData([], [])
-        self.lbl_eq.setVisible(self.modo_eq)
-        self.esperando = False
-        self._cambio()
-        if self.corriendo and self.v.disp.esta_conectado:
-            self.pedir()
 
     def _vigilar(self):
         if self.v.dueno_captura != "osc" and self.v.dueno_captura is not None:
@@ -593,7 +450,6 @@ class TabOsciloscopio(QWidget):
 
     def al_desconectar(self):
         self.esperando = False
-        self._reiniciar_eq()
         self._set_run(False)
 
     def al_recibir(self, d: dict):
@@ -603,20 +459,13 @@ class TabOsciloscopio(QWidget):
             return
         if not self.corriendo:
             return
-        if self.ets_estado == "cap":
-            self.ets_estado = None
-            if not self._procesar_eq(d):
-                self.pedir()                # RUN o Único: sigue intentando
-                return
-            self._refrescar()
-        else:
-            if self.modo.currentText() == "Normal" and d["disparado"] == 0:
-                self.pedir()
-                return
-            if self.unico and d["disparado"] == 0:
-                self.pedir()
-                return
-            self._mostrar(d)
+        if self.modo.currentText() == "Normal" and d["disparado"] == 0:
+            self.pedir()
+            return
+        if self.unico and d["disparado"] == 0:
+            self.pedir()
+            return
+        self._mostrar(d)
         if self.unico:
             self.unico = False
             self._set_run(False)
@@ -695,12 +544,7 @@ class TabOsciloscopio(QWidget):
         estado = {2: "Libre", 1: "Disparado", 0: "Auto (sin disparo)"}.get(u["disparado"], "Desconocido")
         if not self.corriendo:
             estado = "Detenido"
-        if u.get("ets"):
-            estado = "Equivalente" if self.corriendo else "Equivalente (detenido)"
-            self.txt_estado.setText(f"{estado}   f = {M.si(u['f'], 'Hz', 6)}   {M.si(fs, 'S/s', 3)} equiv.   "
-                                    f"{self.fps:.0f} cuadros/s")
-        else:
-            self.txt_estado.setText(f"{estado}   {M.si(fs, 'S/s', 3)}   {self.fps:.0f} cuadros/s")
+        self.txt_estado.setText(f"{estado}   {M.si(fs, 'S/s', 3)}   {self.fps:.0f} cuadros/s")
         self._actualizar_cursores()
 
     # ------------------------------------------------------------ controles
@@ -714,17 +558,9 @@ class TabOsciloscopio(QWidget):
             self.linea_nivel.blockSignals(True)
             self.linea_nivel.setPos(self.nivel.valor() / p.v_div + p.pos.valor())
             self.linea_nivel.blockSignals(False)
-        if self.modo_eq:
-            if self.ets:
-                self.lbl_fs.setText(f"Equivalente: {M.si(self.ets['f'] * M.BINS_EQ, 'S/s', 3)} · "
-                                    f"f = {M.si(self.ets['f'], 'Hz', 6)}")
-            else:
-                self.lbl_fs.setText("Equivalente: esperando la captura")
-            self._cuadro_eq()
-        else:
-            n, pre, fs, *_ = self.parametros_captura()
-            self.lbl_fs.setText(f"Muestreo: {M.si(fs, 'S/s', 3)} · {n} puntos")
-        if self.modo_eq or self.t_div <= TDIV_DESPLAZ_MAX:
+        n, pre, fs, *_ = self.parametros_captura()
+        self.lbl_fs.setText(f"Muestreo: {M.si(fs, 'S/s', 3)} · {n} puntos")
+        if self.t_div <= TDIV_DESPLAZ_MAX:
             self.lbl_desplaz.setText(f"Desplazamiento: {self.desplaz.value() / 10:+.1f} div".replace(".", ","))
         else:
             self.lbl_desplaz.setText(f"Solo hasta {M.si(TDIV_DESPLAZ_MAX, 's')}/div")

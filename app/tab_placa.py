@@ -35,7 +35,6 @@ ESPEC = [
     ("Osciloscopio", "Muestreo máximo", "1,59 MS/s (ADC a 27 MHz)", "1,24 MS/s (ADC a 21 MHz)"),
     ("Osciloscopio", "Ancho de banda útil", "~200 kHz (≥ 8 muestras por ciclo)", "~150 kHz (≥ 8 muestras por ciclo)"),
     ("Osciloscopio", "Límite de Nyquist", "~790 kHz", "~620 kHz"),
-    ("Osciloscopio", "Señales repetitivas", "más arriba con «Tiempo equivalente»", None),
     ("Osciloscopio", "Buffer de captura", "32 768 muestras por canal", "16 384 muestras por canal"),
     ("Osciloscopio", "Ventana en pantalla", "hasta 8192 puntos", None),
     ("Osciloscopio", "Base de tiempo", "2 µs/div a 1 s/div", None),
@@ -289,9 +288,6 @@ ESQUEMAS = {
     "Frecuencímetro y PWM": [
         ("frecpwm",),
     ],
-    "Osciloscopio en «Tiempo equivalente»": [
-        ("eq",),
-    ],
 }
 
 
@@ -432,43 +428,6 @@ class DibujoConexiones(QWidget):
                        "Directo a los pines solo se puede medir entre 0 y 3,3 V. Para señales "
                        "reales (negativas o más grandes) pasá por la etapa de entrada y elegí "
                        "en la app la «Entrada» que coincida con la llave de rango.")
-        elif tipo == "eq":
-            pins = [(pin_n(0), "D6 · PWM (señal de prueba)", C_PWM), (pin_n(1), "A0 · Osc CH1", W.CH1),
-                    (pin_n(2), "D32 · Frecuencímetro", C_FREC), (pin_n(3), "GND", C_GND)]
-            for pt, t, c in pins:
-                self._pin(p, pt, t, c, derecha=False)
-            xb = x_pin + 110
-            ys = [pt.y() for pt, _, _ in pins[:3]]
-            self._cable(p, [pins[0][0], QPointF(xb, ys[0])], C_PWM)
-            self._cable(p, [QPointF(xb, ys[0]), QPointF(xb, ys[2])], C_PWM)
-            self._cable(p, [QPointF(xb, ys[1]), pins[1][0]], W.CH1)
-            self._cable(p, [QPointF(xb, ys[2]), pins[2][0]], C_FREC)
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(C_PWM))
-            for y in ys[1:]:
-                p.drawEllipse(QPointF(xb, y), 4.5, 4.5)
-            ext = QRectF(xb + 90, ys[0] - 40, 190, 80)
-            self._bloque(p, ext, "o una señal externa", "repetitiva y de 0 a 3,3 V", "#d29922")
-            self._cable(p, [QPointF(ext.left(), ys[0]), QPointF(xb, ys[0])], "#d29922")
-            gy = pins[3][0].y()
-            xg = xb + 50
-            self._cable(p, [pins[3][0], QPointF(xg, gy), QPointF(xg, ext.bottom() - 14),
-                            QPointF(ext.left(), ext.bottom() - 14)], C_GND)
-            p.setPen(QColor(W.TENUE))
-            p.setFont(QFont("Segoe UI", 9))
-            p.drawText(QPointF(xg + 6, gy - 6), "masa (solo con señal externa)")
-            p.setPen(QColor(W.TENUE))
-            p.setFont(QFont("Segoe UI", 9))
-            p.drawText(QRectF(xb + 90, ys[0] + 46, 190, 40), Qt.AlignCenter | Qt.TextWordWrap,
-                       "en lugar del PWM, al mismo empalme")
-            self._nota(p, QRectF(ext.right() + 20, nuc.top(), w - ext.right() - 40, nuc.height()),
-                       "La MISMA señal va al canal (A0) y al frecuencímetro (D32): la app mide su frecuencia "
-                       "exacta en D32 y con eso reconstruye un período con 256 puntos.\n\n"
-                       "Sirve para señales repetitivas y estables de más de 400 Hz (sobre todo arriba de "
-                       "~200 kHz). La señal en D32 tiene que cruzar ~1 V y ~2,3 V: una cuadrada de 0–3,3 V "
-                       "o un seno de al menos 2,5 Vpp centrado en 1,65 V.\n\n"
-                       "Prueba: Herramientas → PWM 250 kHz, 50 %, Activar. Osciloscopio: CH1 en «Pin "
-                       "directo», Adquisición «Tiempo equivalente», 2 µs/div, RUN.")
         else:  # frecuencímetro y PWM
             pins = [(pin_n(0), "D32 · Frecuencímetro", C_FREC), (pin_n(1), "D6 · PWM", C_PWM),
                     (pin_n(2), "D42 · PWM complementario", C_PWM), (pin_n(3), "GND", C_GND)]
@@ -483,8 +442,7 @@ class DibujoConexiones(QWidget):
                 self._cable(p, [pt, QPointF(drv.left(), pt.y())], c)
             self._nota(p, QRectF(drv.right() + 20, nuc.top(), w - drv.right() - 40, nuc.height()),
                        "El frecuencímetro espera una señal lógica (0 a 3,3 V). Las salidas PWM son de "
-                       "3,3 V y poca corriente: para manejar transistores de potencia usá un driver. "
-                       "Con D6 a A0 y PWM de 1 kHz al 50 % podés probar el osciloscopio.")
+                       "3,3 V y poca corriente: para manejar transistores de potencia usá un driver.")
         p.end()
 
     def _nota(self, p, r: QRectF, texto):
