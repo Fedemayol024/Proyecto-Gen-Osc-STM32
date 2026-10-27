@@ -189,6 +189,22 @@ class TestConfig(unittest.TestCase):
     def test_sin_archivo_da_valores_por_defecto(self):
         self.assertEqual(M.Config.cargar(), M.Config())
 
+    def test_cada_placa_tiene_su_configuracion(self):
+        M.Config(puerto="COM3").guardar()                       # F767 por defecto
+        M.Config(puerto="COM9", placa="F429").guardar()
+        self.assertEqual(M.Config.cargar().puerto, "COM3")
+        self.assertEqual(M.Config.cargar("F429").puerto, "COM9")
+        self.assertEqual(M.Config.cargar("F429").placa, "F429")
+        self.assertEqual(M.ruta_config().name, "config.json")   # compatibilidad con lo anterior
+        self.assertEqual(M.ruta_config("F429").name, "config_F429.json")
+
+    def test_preferencias_de_placa(self):
+        self.assertEqual(M.cargar_preferencias(), {"placa": "F767", "preguntar": True})
+        M.guardar_preferencias({"placa": "F429", "preguntar": False})
+        self.assertEqual(M.cargar_preferencias(), {"placa": "F429", "preguntar": False})
+        M.ruta_preferencias().write_text('{"placa": "F999"}', encoding="utf-8")
+        self.assertEqual(M.cargar_preferencias()["placa"], "F767")   # placa desconocida
+
     def test_guardar_y_cargar(self):
         c = M.Config(puerto="COM7")
         c.cal_salida["1:PLACA"] = {"codigo_a": 0, "volt_a": -5, "codigo_b": 4095, "volt_b": 5}

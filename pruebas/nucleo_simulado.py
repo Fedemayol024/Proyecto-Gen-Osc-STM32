@@ -1,5 +1,5 @@
 """
-NUCLEO-F767ZI simulado: implementa el protocolo del firmware sobre un
+NUCLEO-F767ZI (o F429ZI, con la variable de entorno SIM_PLACA=F429) simulado: implementa el protocolo del firmware sobre un
 pseudo-terminal (Linux) para probar la app sin la placa.
 
 Conexiones simuladas:
@@ -26,9 +26,14 @@ maestro, esclavo = os.openpty()
 tty.setraw(esclavo)
 print(os.ttyname(esclavo), flush=True)
 
-TCLK1, TCLK2 = 108e6, 216e6
-FS_GEN = TCLK1 / 108
-FSMAX = 27e6 / 17
+PLACA = os.environ.get("SIM_PLACA", "F767")
+if PLACA == "F429":                     # 168 MHz, ADC a 21 MHz
+    TCLK1, TCLK2, CPU = 84e6, 168e6, 168000000
+    FSMAX = 21e6 / 17
+else:                                   # 216 MHz, ADC a 27 MHz
+    TCLK1, TCLK2, CPU = 108e6, 216e6, 216000000
+    FSMAX = 27e6 / 17
+FS_GEN = TCLK1 / round(TCLK1 / 1e6)
 rng = np.random.default_rng(1)
 
 
@@ -162,9 +167,9 @@ while True:
         cmd = p[0]
         try:
             if cmd == "ID?":
-                resp("INSTR-F767 v1.0")
+                resp(f"INSTR-{PLACA} v1.0")
             elif cmd == "INFO?":
-                resp(f"INFO gen_fs={FS_GEN:.3f} osc_fsmax={FSMAX:.3f} tabla=4096 ventana=8192 cpu=216000000")
+                resp(f"INFO gen_fs={FS_GEN:.3f} osc_fsmax={FSMAX:.3f} tabla=4096 ventana=8192 cpu={CPU}")
             elif cmd == "GTBL":
                 bin_pend = (int(p[1]), int(p[2]), int(p[3]))
             elif cmd == "GSET":

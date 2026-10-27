@@ -8,7 +8,7 @@
  *   - los datos del osciloscopio que manda la placa después de "DATA"
  *
  * Comandos (ver también LEEME.md):
- *   ID?                         -> INSTR-F767 v1.0
+ *   ID?                         -> INSTR-F767 v1.0  (o INSTR-F429 v1.0)
  *   INFO?                       -> INFO gen_fs=.. osc_fsmax=.. tabla=4096 ventana=8192
  *   GTBL c n suma  + 2n bytes   -> OK GTBL c        (tabla de c = 1|2, uint16 LE)
  *   GSET c frec fase hab reposo -> OK GSET c frec_real
@@ -222,7 +222,7 @@ static void procesar_linea(char *l)
   double v[8];
   char a[24], b[24], d[24];
 
-  if (!strcmp(c0, "ID?")) { responder("INSTR-F767 v" INSTR_VERSION); return; }
+  if (!strcmp(c0, "ID?")) { responder("INSTR-" PLACA_ID " v" INSTR_VERSION); return; }
   if (!strcmp(c0, "INFO?")) { cmd_info(); return; }
 
   if (!strcmp(c0, "GTBL")) {

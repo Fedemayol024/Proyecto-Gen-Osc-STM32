@@ -1,6 +1,6 @@
 /*
  * instrumento.h - Punto de entrada del instrumento (generador + osciloscopio
- * + frecuencímetro + PWM) para NUCLEO-F767ZI.
+ * + frecuencímetro + PWM) para NUCLEO-F767ZI y NUCLEO-F429ZI.
  *
  * Integración con el proyecto generado por STM32CubeIDE:
  *   main.c          -> instrumento_iniciar() antes del while(1)

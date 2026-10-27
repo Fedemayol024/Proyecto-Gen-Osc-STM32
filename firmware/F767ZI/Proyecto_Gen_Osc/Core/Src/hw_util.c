@@ -7,12 +7,12 @@
 #include <string.h>
 
 /* El reloj de un timer es PCLK si el prescaler de APB es 1, y 2*PCLK si no.
- * Si TIMPRE está activo (RCC_DCKCFGR1), es HCLK cuando el prescaler es 1, 2
+ * Si TIMPRE está activo (RCC_DCKCFGR1 en F7, RCC_DCKCFGR en F4), es HCLK cuando el prescaler es 1, 2
  * o 4, y 4*PCLK en los demás casos. */
 static uint32_t clk_tim(uint32_t pclk, uint32_t ppre_bits, uint32_t div1_bits, uint32_t div2_bits,
                         uint32_t div4_bits)
 {
-  int timpre = (RCC->DCKCFGR1 & RCC_DCKCFGR1_TIMPRE) != 0;
+  int timpre = PLACA_TIMPRE_ACTIVO();
   if (!timpre) {
     return (ppre_bits == div1_bits) ? pclk : 2u * pclk;
   }
@@ -34,25 +34,35 @@ uint32_t clk_tim_apb2(void)
                  RCC_CFGR_PPRE2_DIV1, RCC_CFGR_PPRE2_DIV2, RCC_CFGR_PPRE2_DIV4);
 }
 
+#if PLACA_TIENE_DCACHE
 static int dcache_activa(void)
 {
   return (SCB->CCR & SCB_CCR_DC_Msk) != 0u;
 }
+#endif
 
 void cache_limpiar(const void *p, size_t n)
 {
+#if !PLACA_TIENE_DCACHE
+  (void)p; (void)n;          /* Cortex-M4: no hay caché de datos */
+#else
   if (!dcache_activa() || n == 0u) return;
   uint32_t a = (uint32_t)p & ~31u;
   uint32_t fin = ((uint32_t)p + n + 31u) & ~31u;
   SCB_CleanDCache_by_Addr((uint32_t *)a, (int32_t)(fin - a));
+#endif
 }
 
 void cache_invalidar(const void *p, size_t n)
 {
+#if !PLACA_TIENE_DCACHE
+  (void)p; (void)n;
+#else
   if (!dcache_activa() || n == 0u) return;
   uint32_t a = (uint32_t)p & ~31u;
   uint32_t fin = ((uint32_t)p + n + 31u) & ~31u;
   SCB_InvalidateDCache_by_Addr((uint32_t *)a, (int32_t)(fin - a));
+#endif
 }
 
 int leer_double(const char *s, double *v)

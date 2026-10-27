@@ -1,6 +1,7 @@
 """
-Instrumento NUCLEO-F767ZI - Osciloscopio + Generador + Bode + Herramientas
-==========================================================================
+Instrumento NUCLEO-F767ZI / NUCLEO-F429ZI - Osciloscopio + Generador + Bode + Herramientas
+=========================================================================================
+Al abrir se elige la placa (se puede recordar la elección y cambiarla después).
 Ejecutar:   python main.py
 Crear .exe: build_exe.bat
 """
@@ -11,7 +12,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel, QMainWindow,
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
+                               QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
                                QStatusBar, QTabWidget, QVBoxLayout, QWidget)
 
 import modelo as M
@@ -31,12 +33,75 @@ def recurso(nombre: str) -> str:
     return str(base / nombre)
 
 
+class DialogoPlaca(QDialog):
+    """Menú inicial: elegir con qué placa se va a trabajar."""
+
+    def __init__(self, actual: str = M.PLACA_POR_DEFECTO, recordar: bool = False, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Elegí la placa")
+        self.setMinimumWidth(520)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 18)
+        lay.setSpacing(12)
+        t = QLabel("¿Con qué placa vas a trabajar?")
+        t.setStyleSheet(f"font-size: 15pt; font-weight: 700; color: {W.TEXTO};")
+        lay.addWidget(t)
+        lay.addWidget(W.etiqueta_tenue("Cada placa tiene su propio firmware y guarda su propia "
+                                       "calibración. Podés cambiarla después desde la barra de arriba."))
+        self.grupo = QButtonGroup(self)
+        self.grupo.setExclusive(True)
+        self.botones = {}
+        for clave, info in M.PLACAS.items():
+            b = QPushButton(f"{info['nombre']}\n{info['detalle']}")
+            b.setCheckable(True)
+            b.setMinimumHeight(64)
+            b.setStyleSheet("QPushButton { text-align: left; padding: 10px 14px; font-size: 11pt; }")
+            b.setChecked(clave == actual)
+            b.clicked.connect(lambda _=False, c=clave: self._elegida(c))
+            b.setProperty("clave", clave)
+            self.grupo.addButton(b)
+            self.botones[clave] = b
+            lay.addWidget(b)
+        self.recordar = QCheckBox("Recordar mi elección y no volver a preguntar")
+        self.recordar.setChecked(recordar)
+        lay.addWidget(self.recordar)
+        fila = QHBoxLayout()
+        fila.addStretch(1)
+        fila.addWidget(W.boton("Cancelar", self.reject))
+        self.btn_ok = W.boton("Continuar", self.accept, primario=True)
+        fila.addWidget(self.btn_ok)
+        lay.addLayout(fila)
+        self._placa = actual if actual in M.PLACAS else M.PLACA_POR_DEFECTO
+        self.botones[self._placa].setChecked(True)
+
+    def _elegida(self, clave: str):
+        self._placa = clave
+
+    @property
+    def placa(self) -> str:
+        return self._placa
+
+
+def elegir_placa(parent=None, forzar: bool = False) -> str | None:
+    """Devuelve la placa elegida (y guarda la preferencia) o None si se canceló."""
+    pref = M.cargar_preferencias()
+    if not forzar and not pref["preguntar"]:
+        return pref["placa"]
+    dlg = DialogoPlaca(pref["placa"], recordar=not pref["preguntar"], parent=parent)
+    if dlg.exec() != QDialog.Accepted:
+        return None
+    M.guardar_preferencias({"placa": dlg.placa, "preguntar": not dlg.recordar.isChecked()})
+    return dlg.placa
+
+
 class Ventana(QMainWindow):
-    def __init__(self):
+    def __init__(self, placa: str = M.PLACA_POR_DEFECTO, auto_puerto: str | None = None):
         super().__init__()
-        self.setWindowTitle("Instrumento F767 · Osciloscopio y generador")
+        self.placa = placa if placa in M.PLACAS else M.PLACA_POR_DEFECTO
+        nombre = M.nombre_placa(self.placa)
+        self.setWindowTitle(f"Instrumento {nombre} · Osciloscopio y generador")
         self.resize(1360, 860)
-        self.config = M.Config.cargar()
+        self.config = M.Config.cargar(self.placa)
         self.disp = Dispositivo()
         self.dueno_captura = None          # quién pidió la última captura
         self._esperado = None              # (n, pre) de la captura pedida
@@ -49,10 +114,13 @@ class Ventana(QMainWindow):
 
         # barra de conexión
         barra = QHBoxLayout()
-        titulo = QLabel("◉  Instrumento F767")
+        titulo = QLabel("◉  Instrumento")
         titulo.setStyleSheet(f"font-size: 14pt; font-weight: 700; color: {W.TEXTO};")
         barra.addWidget(titulo)
-        barra.addSpacing(20)
+        self.btn_placa = W.boton(f"{nombre}  ▾", self._menu_placa)
+        self.btn_placa.setToolTip("Cambiar de placa")
+        barra.addWidget(self.btn_placa)
+        barra.addSpacing(16)
         self.combo_puertos = QComboBox()
         self.combo_puertos.setMinimumWidth(320)
         barra.addWidget(self.combo_puertos)
@@ -92,6 +160,34 @@ class Ventana(QMainWindow):
         self.disp.datos.connect(self._al_datos)
 
         self.actualizar_puertos()
+        if auto_puerto:
+            for et, dev in self._mapa_puertos.items():
+                if dev == auto_puerto:
+                    self.combo_puertos.setCurrentText(et)
+                    QTimer.singleShot(400, self.alternar_conexion)
+                    break
+
+    # -------------------------------------------------------------- placa
+    def _menu_placa(self):
+        nueva = elegir_placa(self, forzar=True)
+        if nueva and nueva != self.placa:
+            self.cambiar_placa(nueva)
+
+    def cambiar_placa(self, placa: str, puerto: str | None = None):
+        """Reabre la ventana con la configuración y calibración de otra placa."""
+        pref = M.cargar_preferencias()
+        pref["placa"] = placa
+        M.guardar_preferencias(pref)
+        if self.disp.esta_conectado:
+            self.disp.enviar("CAPX")
+            self.disp.cerrar()
+        nueva = Ventana(placa, auto_puerto=puerto)
+        nueva.resize(self.size())
+        nueva.move(self.pos())
+        app = QApplication.instance()
+        app._ventana = nueva
+        nueva.show()
+        self.close()
 
     # -------------------------------------------------------------- estado
     def estado(self, texto: str, color: str = W.TENUE):
@@ -141,11 +237,26 @@ class Ventana(QMainWindow):
         self.disp.abrir(puerto)
 
     def _al_conectar(self, version: str):
+        detectada = self.disp.placa
+        if detectada and detectada != self.placa:
+            puerto = self.disp.puerto
+            self.disp.cerrar()
+            self._al_desconectar(f"La placa conectada es {M.nombre_placa(detectada)}, no "
+                                 f"{M.nombre_placa(self.placa)}.", W.ALERTA)
+            if detectada in M.PLACAS:
+                r = QMessageBox.question(
+                    self, "Otra placa",
+                    f"La placa conectada es una {M.nombre_placa(detectada)}, pero la app está "
+                    f"configurada para {M.nombre_placa(self.placa)}.\n\n"
+                    f"¿Cambiar a {M.nombre_placa(detectada)} y conectar?")
+                if r == QMessageBox.Yes:
+                    self.cambiar_placa(detectada, puerto)
+            return
         self.config.puerto = self.disp.puerto
         self.btn_con.setEnabled(True)
         self.btn_con.setText("Desconectar")
         info = self.disp.info
-        self.lbl_con.setText(f"● Conectado · {self.disp.puerto} · firmware v{version} · "
+        self.lbl_con.setText(f"● Conectado · {self.disp.puerto} · {M.nombre_placa(self.placa)} · v{version} · "
                              f"generador {M.si(info.get('gen_fs', 0), 'S/s', 3)} · "
                              f"osciloscopio hasta {M.si(info.get('osc_fsmax', 0), 'S/s', 3)}")
         self.lbl_con.setStyleSheet(f"color: {W.OK};")
@@ -212,8 +323,11 @@ def main():
     ico = recurso("icono.ico")
     if Path(ico).exists():
         app.setWindowIcon(QIcon(ico))
-    v = Ventana()
-    v.show()
+    placa = elegir_placa()
+    if placa is None:
+        return
+    app._ventana = Ventana(placa)
+    app._ventana.show()
     sys.exit(app.exec())
 
 

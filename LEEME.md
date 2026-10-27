@@ -1,6 +1,6 @@
-# Instrumento NUCLEO-F767ZI: osciloscopio, generador, Bode, frecuencímetro y PWM
+# Instrumento NUCLEO-F767ZI / NUCLEO-F429ZI: osciloscopio, generador, Bode, frecuencímetro y PWM
 
-Una sola app de PC y una placa NUCLEO-F767ZI forman un pequeño laboratorio por USB:
+Una sola app de PC y una placa **NUCLEO-F767ZI** o **NUCLEO-F429ZI** forman un pequeño laboratorio por USB. Las dos placas usan los mismos pines; al abrir la app se elige con cuál trabajar.
 
 | Función | Qué hace | Pines |
 |---|---|---|
@@ -15,7 +15,8 @@ Una sola app de PC y una placa NUCLEO-F767ZI forman un pequeño laboratorio por 
 ## Contenido
 
 ```
-firmware/Core/Inc/*.h, firmware/Core/Src/*.c   → se copian al proyecto de STM32CubeIDE
+firmware/F767ZI/Proyecto_Gen_Osc/              → proyecto de STM32CubeIDE completo para la F767ZI
+firmware/F429ZI/Core/Inc, Core/Src             → archivos para el proyecto de la F429ZI (ver su LEEME)
 app/main.py (+ otros .py)                      → programa de PC
 app/build_exe.bat                              → crea Instrumento.exe
 hardware/hoja1_salidas.png                     → salidas ±5 V del generador
@@ -27,6 +28,17 @@ pruebas/                                       → Nucleo simulado y pruebas aut
 ---
 
 ## 1. Firmware en STM32CubeIDE
+
+Cada placa tiene su carpeta con su propia guía:
+
+| Placa | Carpeta | Qué hay |
+|---|---|---|
+| NUCLEO-F767ZI | `firmware/F767ZI` | El proyecto de CubeIDE listo: **File → Import → Existing Projects into Workspace**. |
+| NUCLEO-F429ZI | `firmware/F429ZI` | Los archivos del instrumento y los pasos para crear el proyecto (HCLK a **168 MHz**). |
+
+El código del instrumento es el mismo en las dos. `placa.h` detecta el micro al compilar y resuelve las diferencias: caché de datos, disparo del ADC, registro de reloj de los timers y tamaño del buffer del osciloscopio (el F429 tiene 192 KB de RAM y captura hasta 16384 muestras en lugar de 32768).
+
+Los pasos de abajo sirven para crear el proyecto desde cero. Para la F429ZI, seguí `firmware/F429ZI/LEEME.md`, que tiene sus diferencias.
 
 El código del instrumento configura sus periféricos (DAC, ADC, DMA y timers) directamente en los registros. Por eso, en CubeMX **solo hay que activar el USB**. El firmware se compiló contra la HAL F7 y la librería USB oficiales de ST, sin errores ni advertencias.
 
@@ -46,7 +58,7 @@ El código del instrumento configura sus periféricos (DAC, ADC, DMA y timers) d
 > La D-Cache del Cortex-M7 (*System Core → CORTEX_M7*) puede estar activada o no: el código hace el mantenimiento de caché solo.
 
 ### 1.3 Agregar los archivos
-Copiá los `.h` de `firmware/Core/Inc` a la carpeta **Core/Inc** del proyecto, y los `.c` de `firmware/Core/Src` a **Core/Src**. Podés arrastrarlos al *Project Explorer* y elegir *Copy files*.
+Copiá los `.h` de `Core/Inc` y los `.c` de `Core/Src` de la carpeta de tu placa (en la F767ZI están dentro de `Proyecto_Gen_Osc`) a las carpetas **Core/Inc** y **Core/Src** del proyecto. Son 7 `.h` (incluido `placa.h`) y 6 `.c`. Podés arrastrarlos al *Project Explorer* y elegir *Copy files*.
 
 ### 1.4 Tres agregados en `Core/Src/main.c`
 ```c
@@ -110,6 +122,7 @@ python main.py
 Para crear el `.exe`, hacé doble clic en `app/build_exe.bat`. Necesita Python 3.10 o superior instalado desde python.org con *Add to PATH*. El ejecutable queda en `app\dist\Instrumento.exe`. Es un solo archivo de unos 80–100 MB y tarda unos segundos en abrir.
 
 **Uso rápido**
+0. **Al abrir, elegí la placa** (NUCLEO-F767ZI o NUCLEO-F429ZI). Si marcás *Recordar mi elección*, no vuelve a preguntar. Se cambia después con el botón de la placa en la barra de arriba. Cada placa guarda su propia configuración y calibración. Si conectás una placa distinta de la elegida, la app lo detecta y ofrece cambiar.
 1. Elegí el puerto marcado como *"Instrumento (USB del Nucleo)"* → **Conectar**. El del ST-LINK aparece marcado como "no es este".
 2. **Generador:** cada canal tiene su salida, forma, frecuencia o período (aceptan `2k`, `2,5 kHz`, `20 ms`…), amplitud, offset, ciclo útil o simetría, fase, modulación y barrido. Los cambios se mandan solos. La rueda del mouse sobre un campo ajusta la segunda cifra.
 3. **Osciloscopio:**
@@ -123,7 +136,7 @@ Para crear el `.exe`, hacé doble clic en `app/build_exe.bat`. Necesita Python 3
    - **Salidas:** con multímetro, dos puntos por canal.
    - **Entradas:** automática, conectando OUT1→IN1 y OUT2→IN2. También hay un "cero" con las entradas a GND.
 
-Las calibraciones y los ajustes se guardan en `%APPDATA%\InstrumentoF767\config.json`.
+Las calibraciones y los ajustes se guardan en `%APPDATA%\InstrumentoF767\`: `config.json` para la F767ZI y `config_F429.json` para la F429ZI. La placa elegida se guarda en `preferencias.json`.
 
 ---
 

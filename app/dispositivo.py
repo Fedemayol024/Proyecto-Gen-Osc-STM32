@@ -1,5 +1,5 @@
 """
-Comunicación con la placa NUCLEO-F767ZI por el puerto USB virtual.
+Comunicación con la placa (NUCLEO-F767ZI o NUCLEO-F429ZI) por el puerto USB virtual.
 
 Un hilo lee continuamente: separa las líneas de texto y, cuando llega
 "DATA n pre fs disparado", lee los 4·n bytes binarios que siguen y los
@@ -16,7 +16,7 @@ import serial
 import serial.tools.list_ports
 from PySide6.QtCore import QObject, Signal
 
-ID_ESPERADO = "INSTR-F767"
+ID_PREFIJO = "INSTR-"      # "INSTR-F767 v1.0" o "INSTR-F429 v1.0"
 VID_ST, PID_CDC = 0x0483, 0x5740
 
 
@@ -52,6 +52,7 @@ class Dispositivo(QObject):
         self._lock = threading.Lock()
         self.puerto: str | None = None
         self.version: str | None = None
+        self.placa: str | None = None      # placa que respondió ("F767", "F429")
         self.info: dict = {}
 
     # ------------------------------------------------------------------
@@ -105,6 +106,7 @@ class Dispositivo(QObject):
             return
         buf = b""
         version = None
+        placa = None
         info = {}
         t0 = time.monotonic()
         ultimo = 0.0
@@ -119,8 +121,10 @@ class Dispositivo(QObject):
                 while b"\n" in buf:
                     l, buf = buf.split(b"\n", 1)
                     s = l.decode("ascii", "replace").strip()
-                    if s.startswith(ID_ESPERADO):
-                        version = s.split("v")[-1]
+                    if s.startswith(ID_PREFIJO):
+                        partes = s.split()
+                        placa = partes[0][len(ID_PREFIJO):]
+                        version = partes[1].lstrip("v") if len(partes) > 1 else "?"
                     elif s.startswith("INFO"):
                         for p in s.split()[1:]:
                             if "=" in p:
@@ -139,7 +143,7 @@ class Dispositivo(QObject):
                             "instrumento y conectado el USB USER (CN13)?")
             return
         self._ser, self._activo = ser, True
-        self.puerto, self.version, self.info = puerto, version, info
+        self.puerto, self.version, self.info, self.placa = puerto, version, info, placa
         self.conectado.emit(version)
         threading.Thread(target=self._lector, args=(ser,), daemon=True).start()
 

@@ -562,10 +562,63 @@ def leer_si(texto: str) -> float:
 # ---------------------------------------------------------------------------
 # Configuración persistente
 # ---------------------------------------------------------------------------
-def ruta_config() -> Path:
+# ---------------------------------------------------------------------------
+# Placas soportadas
+# ---------------------------------------------------------------------------
+# Clave = lo que responde el firmware a "ID?" ("INSTR-F767 v1.0" -> "F767").
+PLACAS = {
+    "F767": {"nombre": "NUCLEO-F767ZI",
+             "detalle": "Cortex-M7 · 216 MHz · osciloscopio hasta ~1,6 MS/s"},
+    "F429": {"nombre": "NUCLEO-F429ZI",
+             "detalle": "Cortex-M4 · 168 MHz · osciloscopio hasta ~1,2 MS/s"},
+}
+PLACA_POR_DEFECTO = "F767"
+
+
+def nombre_placa(placa: str) -> str:
+    return PLACAS.get(placa, {}).get("nombre", f"placa {placa}")
+
+
+def carpeta_config() -> Path:
     base = os.environ.get("APPDATA")
-    carpeta = Path(base) / "InstrumentoF767" if base else Path.home() / ".instrumento_f767"
-    return carpeta / "config.json"
+    # Se mantiene el nombre de carpeta original para no perder calibraciones.
+    return Path(base) / "InstrumentoF767" if base else Path.home() / ".instrumento_f767"
+
+
+def ruta_config(placa: str = PLACA_POR_DEFECTO) -> Path:
+    """Cada placa tiene su propia configuración (las calibraciones dependen del
+    DAC y del ADC de cada micro). La F767 conserva el nombre original."""
+    nombre = "config.json" if placa == PLACA_POR_DEFECTO else f"config_{placa}.json"
+    return carpeta_config() / nombre
+
+
+def ruta_preferencias() -> Path:
+    return carpeta_config() / "preferencias.json"
+
+
+def cargar_preferencias() -> dict:
+    """{"placa": "F767", "preguntar": True}"""
+    pref = {"placa": PLACA_POR_DEFECTO, "preguntar": True}
+    try:
+        d = json.loads(ruta_preferencias().read_text(encoding="utf-8"))
+        if isinstance(d, dict):
+            if d.get("placa") in PLACAS:
+                pref["placa"] = d["placa"]
+            pref["preguntar"] = bool(d.get("preguntar", True))
+    except (OSError, ValueError, TypeError):
+        pass
+    return pref
+
+
+def guardar_preferencias(pref: dict):
+    try:
+        r = ruta_preferencias()
+        r.parent.mkdir(parents=True, exist_ok=True)
+        tmp = r.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(pref, indent=2), encoding="utf-8")
+        os.replace(tmp, r)
+    except OSError:
+        pass
 
 
 @dataclass
@@ -576,6 +629,7 @@ class Config:
     gen: dict = field(default_factory=dict)
     osc: dict = field(default_factory=dict)
     herramientas: dict = field(default_factory=dict)
+    placa: str = PLACA_POR_DEFECTO      # a qué placa pertenece esta configuración
 
     def recta_salida(self, canal: int, modo: str) -> Recta:
         r = Recta.desde_dict(self.cal_salida.get(f"{canal}:{modo}", {}))
@@ -586,19 +640,19 @@ class Config:
         return r or MODOS_ENTRADA[modo].diseno
 
     @staticmethod
-    def cargar() -> "Config":
-        ruta = ruta_config()
+    def cargar(placa: str = PLACA_POR_DEFECTO) -> "Config":
+        ruta = ruta_config(placa)
         try:
             d = json.loads(ruta.read_text(encoding="utf-8"))
             if not isinstance(d, dict):
                 raise ValueError("config.json no es un objeto JSON")
-            c = Config()
+            c = Config(placa=placa)
             for k in asdict(c):
-                if k in d:
+                if k in d and k != "placa":
                     setattr(c, k, d[k])
             return c
         except FileNotFoundError:
-            return Config()
+            return Config(placa=placa)
         except (OSError, ValueError, TypeError):
             # Archivo ilegible o cortado: se conserva una copia antes de que el
             # próximo guardado lo pise con los valores por defecto (las
@@ -607,11 +661,11 @@ class Config:
                 ruta.replace(ruta.with_suffix(".json.corrupto"))
             except OSError:
                 pass
-            return Config()
+            return Config(placa=placa)
 
     def guardar(self):
         try:
-            r = ruta_config()
+            r = ruta_config(self.placa)
             r.parent.mkdir(parents=True, exist_ok=True)
             tmp = r.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(asdict(self), indent=2, ensure_ascii=False), encoding="utf-8")

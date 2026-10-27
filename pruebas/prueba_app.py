@@ -21,7 +21,7 @@ A.listar_puertos = lambda: [(PTY, f"{PTY} · Instrumento (USB del Nucleo)")]
 
 app = QApplication(sys.argv)
 app.setStyleSheet(W.ESTILO)
-v = A.Ventana()
+v = A.Ventana(os.environ.get("SIM_PLACA", "F767"))
 v.resize(1400, 880)
 v.show()
 pasos, res = [], []

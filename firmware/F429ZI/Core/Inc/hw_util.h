@@ -5,7 +5,7 @@
 #ifndef HW_UTIL_H
 #define HW_UTIL_H
 
-#include "stm32f7xx_hal.h"
+#include "placa.h"
 #include <stdint.h>
 #include <stddef.h>
 

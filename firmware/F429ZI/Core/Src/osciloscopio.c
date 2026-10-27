@@ -189,8 +189,8 @@ double osc_capturar(const osc_param_t *p)
   TIM8->SR = 0;
   TIM8->CR2 = TIM_CR2_MMS_1;         /* TRGO = actualización */
 
-  /* Disparo externo del ADC1: TIM8_TRGO (0111), flanco ascendente */
-  ADC1->CR2 |= (7u << ADC_CR2_EXTSEL_Pos) | ADC_CR2_EXTEN_0;
+  /* Disparo externo del ADC1: TIM8_TRGO (código según la placa), flanco ascendente */
+  ADC1->CR2 |= (PLACA_ADC_EXTSEL_TIM8_TRGO << ADC_CR2_EXTSEL_Pos) | ADC_CR2_EXTEN_0;
 
   estado = EST_CAPTURANDO;
   TIM8->CR1 = TIM_CR1_CEN;

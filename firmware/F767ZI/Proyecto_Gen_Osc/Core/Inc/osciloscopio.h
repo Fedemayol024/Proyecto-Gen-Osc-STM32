@@ -11,8 +11,9 @@
 #define OSCILOSCOPIO_H
 
 #include <stdint.h>
+#include "placa.h"
 
-#define OSC_MAX_MUESTRAS  32768u     /* tamaño del buffer de captura (pares) */
+#define OSC_MAX_MUESTRAS  PLACA_OSC_MAX_MUESTRAS   /* tamaño del buffer de captura (pares) */
 #define OSC_MAX_VENTANA   8192u      /* puntos máximos por canal enviados a la PC */
 
 typedef enum { OSC_FLANCO_SUBE = 0, OSC_FLANCO_BAJA = 1 } osc_flanco_t;
