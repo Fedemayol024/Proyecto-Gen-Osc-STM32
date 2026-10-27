@@ -16,7 +16,7 @@ import serial
 import serial.tools.list_ports
 from PySide6.QtCore import QObject, Signal
 
-ID_PREFIJO = "INSTR-"      # "INSTR-F767 v1.0" o "INSTR-F429 v1.0"
+ID_PREFIJO = "INSTR-"      # "INSTR-F767 v0.8.18" o "INSTR-F429 v0.8.18"
 VID_ST, PID_CDC = 0x0483, 0x5740
 
 

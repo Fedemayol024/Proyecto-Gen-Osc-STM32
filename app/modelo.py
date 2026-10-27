@@ -661,7 +661,7 @@ def leer_si(texto: str) -> float:
 # ---------------------------------------------------------------------------
 # Placas soportadas
 # ---------------------------------------------------------------------------
-# Clave = lo que responde el firmware a "ID?" ("INSTR-F767 v1.0" -> "F767").
+# Clave = lo que responde el firmware a "ID?" ("INSTR-F767 v0.8.18" -> "F767").
 PLACAS = {
     "F767": {"nombre": "NUCLEO-F767ZI",
              "detalle": "Cortex-M7 · 216 MHz · osciloscopio hasta ~1,6 MS/s"},

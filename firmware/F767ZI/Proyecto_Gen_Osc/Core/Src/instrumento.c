@@ -8,7 +8,7 @@
  *   - los datos del osciloscopio que manda la placa después de "DATA"
  *
  * Comandos (ver también LEEME.md):
- *   ID?                         -> INSTR-F767 v1.0  (o INSTR-F429 v1.0)
+ *   ID?                         -> INSTR-F767 v0.8.18  (o INSTR-F429 v0.8.18)
  *   INFO?                       -> INFO gen_fs=.. osc_fsmax=.. tabla=4096 ventana=8192 ..
  *                                  reinicio=watchdog|energia|boton|software|otro
  *   GTBL c n suma  + 2n bytes   -> OK GTBL c        (tabla de c = 1|2, uint16 LE)

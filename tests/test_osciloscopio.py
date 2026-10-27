@@ -272,11 +272,23 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         self.v.disp.enviar_tabla = lambda *a: True
         with mock.patch.object(type(self.v.disp), "esta_conectado", new_callable=mock.PropertyMock,
                                return_value=True):
-            self.v._al_conectar("1.0")
+            self.v._al_conectar(A.VERSION)
         self.assertIsNone(self.v._reconexion)
         self.assertIn("watchdog", self.v.statusBar().currentMessage())
         self.assertTrue(any(e.startswith("GSET") for e in enviados))   # se reenvió el generador
         self.assertIn("watchdog", self.v.tab_placa.lbl_vivo.text())
+
+    def test_aviso_de_firmware_de_otra_version(self):
+        self.assertTrue(A.misma_serie("0.8.18", "0.8.25"))
+        self.assertFalse(A.misma_serie("0.7.3", "0.8.18"))
+        self.assertIn(A.VERSION, self.v.windowTitle())
+        self.v.disp.info, self.v.disp.placa, self.v.disp.puerto = {}, "F767", "COM7"
+        self.v.disp.enviar = lambda t: True
+        self.v.disp.enviar_tabla = lambda *a: True
+        with mock.patch.object(type(self.v.disp), "esta_conectado", new_callable=mock.PropertyMock,
+                               return_value=True):
+            self.v._al_conectar("0.7.3")
+        self.assertIn("cargá el firmware", self.v.statusBar().currentMessage())
 
     def test_reconexion_se_rinde_y_se_puede_cancelar(self):
         self.v.disp.abrir = lambda puerto: None

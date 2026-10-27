@@ -27,7 +27,17 @@ from tab_herramientas import TabHerramientas
 from tab_osciloscopio import TabOsciloscopio
 from tab_placa import TabPlaca
 
-VERSION = "1.0"
+# Versión de la app (MAYOR.MENOR.PARCHE). Mientras el MAYOR sea 0 es una beta: todavía
+# se agregan funciones. El firmware usa el mismo número (INSTR_VERSION en instrumento.h);
+# si cambia el MAYOR.MENOR, la app pide cargar el firmware nuevo.
+VERSION = "0.8.18"
+ETAPA = "beta"
+VERSION_TEXTO = f"{VERSION} {ETAPA}".strip()
+
+
+def misma_serie(a: str, b: str) -> bool:
+    """True si dos versiones comparten MAYOR.MENOR (protocolo compatible)."""
+    return a.split(".")[:2] == b.split(".")[:2]
 
 
 def recurso(nombre: str) -> str:
@@ -118,7 +128,7 @@ class Ventana(QMainWindow):
         super().__init__()
         self.placa = placa if placa in M.PLACAS else M.PLACA_POR_DEFECTO
         nombre = M.nombre_placa(self.placa)
-        self.setWindowTitle(f"Instrumento {nombre} · Osciloscopio y generador")
+        self.setWindowTitle(f"Instrumento {nombre} · Osciloscopio y generador · v{VERSION_TEXTO}")
         self.resize(1360, 860)
         self.config = M.Config.cargar(self.placa)
         self.disp = Dispositivo()
@@ -193,7 +203,7 @@ class Ventana(QMainWindow):
         self.tabs.addTab(self.tab_placa, "Placa")
 
         self.setStatusBar(QStatusBar())
-        self.estado(f"Versión {VERSION}. Conectá el USB USER (CN13) del Nucleo y tocá Conectar.")
+        self.estado(f"Versión {VERSION_TEXTO}. Conectá el USB USER (CN13) del Nucleo y tocá Conectar.")
         self._escala_cambiada()
 
         self.disp.conectado.connect(self._al_conectar)
@@ -384,7 +394,7 @@ class Ventana(QMainWindow):
         self.btn_con.setEnabled(True)
         self.btn_con.setText("Desconectar")
         info = self.disp.info
-        self.lbl_con.setText(f"● Conectado · {self.disp.puerto} · {M.nombre_placa(self.placa)} · v{version} · "
+        self.lbl_con.setText(f"● Conectado · {self.disp.puerto} · {M.nombre_placa(self.placa)} · firmware v{version} · "
                              f"generador {M.si(info.get('gen_fs', 0), 'S/s', 3)} · "
                              f"osciloscopio hasta {M.si(info.get('osc_fsmax', 0), 'S/s', 3)}")
         self.lbl_con.setStyleSheet(f"color: {W.OK};")
@@ -392,7 +402,10 @@ class Ventana(QMainWindow):
         self.tab_osc.al_conectar()
         self.tab_placa.al_conectar()
         self.guardar_config_pronto()
-        if info.get("reinicio") == "watchdog":
+        if not misma_serie(version, VERSION):
+            self.estado(f"El firmware de la placa es v{version} y la app es v{VERSION}: cargá el "
+                        "firmware de esta versión para que todo funcione bien.", W.ALERTA)
+        elif info.get("reinicio") == "watchdog":
             self.estado("Atención: la placa se reinició sola porque el firmware se había colgado "
                         "(watchdog). Se volvió a enviar la configuración.", W.ALERTA)
         elif reconectado:
