@@ -37,7 +37,7 @@ class TabCalibracion(QWidget):
             b = W.boton(f"Poner punto {i}", lambda _=False, c=cod: self._poner(c))
             e = QLineEdit()
             e.setPlaceholderText("V medidos")
-            e.setFixedWidth(110)
+            W.tam(e, "setFixedWidth", 110)
             f.addWidget(b)
             f.addWidget(QLabel(f"código {cod}"))
             f.addStretch(1)

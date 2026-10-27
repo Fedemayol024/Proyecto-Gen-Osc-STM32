@@ -128,7 +128,7 @@ class DibujoPlaca(QWidget):
     def __init__(self):
         super().__init__()
         self.placa = M.PLACA_POR_DEFECTO
-        self.setMinimumSize(900, 700)
+        W.tam(self, "setMinimumSize", 900, 700)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def set_placa(self, placa):
@@ -139,7 +139,8 @@ class DibujoPlaca(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.fillRect(self.rect(), QColor(W.FONDO))
-        w, h = self.width(), self.height()
+        p.scale(W.ESCALA, W.ESCALA)                 # el dibujo entero acompaña al zoom
+        w, h = self.width() / W.ESCALA, self.height() / W.ESCALA
         alto = h - 50
         ancho = alto * 70 / 133
         if ancho > w - 2 * self.MARGEN:
@@ -295,7 +296,7 @@ class DibujoConexiones(QWidget):
     def __init__(self):
         super().__init__()
         self.esquema = next(iter(ESQUEMAS))
-        self.setMinimumSize(760, 420)
+        W.tam(self, "setMinimumSize", 760, 420)
 
     def set_esquema(self, nombre):
         self.esquema = nombre
@@ -354,7 +355,8 @@ class DibujoConexiones(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.fillRect(self.rect(), QColor(W.FONDO))
-        w, h = self.width(), self.height()
+        p.scale(W.ESCALA, W.ESCALA)                 # el dibujo entero acompaña al zoom
+        w, h = self.width() / W.ESCALA, self.height() / W.ESCALA
         tipo = ESQUEMAS[self.esquema][0][0]
         nuc = QRectF(40, 130, 220, max(220, h - 200))
         self._nucleo(p, nuc)
@@ -466,7 +468,7 @@ class TabPlaca(QWidget):
         # izquierda: capacidades y límites
         sc = QScrollArea()
         sc.setWidgetResizable(True)
-        sc.setFixedWidth(560)
+        W.tam(sc, "setFixedWidth", 560)
         sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         cont = QWidget()
         lay = QVBoxLayout(cont)
@@ -475,7 +477,7 @@ class TabPlaca(QWidget):
         raiz.addWidget(sc)
 
         self.lbl_titulo = QLabel()
-        self.lbl_titulo.setStyleSheet(f"font-size: 15pt; font-weight: 700; color: {W.TEXTO};")
+        self.lbl_titulo.setObjectName("titulo")
         lay.addWidget(self.lbl_titulo)
         self.lbl_vivo = W.etiqueta_tenue("")
         lay.addWidget(self.lbl_vivo)
@@ -543,7 +545,7 @@ class TabPlaca(QWidget):
                              f"font-weight:700'>{sec}</td></tr>")
                 seccion = sec
             dif = v429 is not None
-            marca = (f"<br><span style='color:{W.TENUE};font-size:9pt'>"
+            marca = (f"<br><span style='color:{W.TENUE};font-size:small'>"
                      f"{M.nombre_placa(otra)}: {vals[otra]}</span>") if dif else ""
             filas.append(f"<tr><td style='color:{W.TENUE};padding-right:12px' width='38%'>{par}</td>"
                          f"<td>{vals[placa]}{marca}</td></tr>")

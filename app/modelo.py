@@ -343,15 +343,276 @@ def repeticiones_bode(amp: float, residuo: float, n: int, t_captura: float,
     return int(min(maximo, tope, max(1, k)))
 
 
-def espectro(v: np.ndarray, fs: float) -> tuple[np.ndarray, np.ndarray]:
-    """Espectro en dBV (valor eficaz de cada componente), ventana de Hann."""
+# ---------------------------------------------------------------------------
+# Espectro (FFT): ventanas, promediado, piso de ruido y picos
+# ---------------------------------------------------------------------------
+VENTANAS = ["Hann", "Hamming", "Blackman-Harris", "Flat-top", "Rectangular"]
+DB_MIN = -160.0          # piso de la escala en dB (nada se dibuja más abajo)
+
+
+def ventana_fft(nombre: str, n: int) -> np.ndarray:
+    k = np.arange(n) / max(n - 1, 1) * 2 * np.pi
+    if nombre == "Hamming":
+        return 0.54 - 0.46 * np.cos(k)
+    if nombre == "Blackman-Harris":
+        return 0.35875 - 0.48829 * np.cos(k) + 0.14128 * np.cos(2 * k) - 0.01168 * np.cos(3 * k)
+    if nombre == "Flat-top":
+        return (0.21557895 - 0.41663158 * np.cos(k) + 0.277263158 * np.cos(2 * k)
+                - 0.083578947 * np.cos(3 * k) + 0.006947368 * np.cos(4 * k))
+    if nombre == "Rectangular":
+        return np.ones(n)
+    return np.hanning(n)
+
+
+def enbw(w: np.ndarray) -> float:
+    """Ancho de banda equivalente de ruido de la ventana, en bins."""
+    return float(len(w) * np.sum(w ** 2) / np.sum(w) ** 2)
+
+
+def espectro_potencia(v: np.ndarray, fs: float, ventana: str = "Hann") -> tuple[np.ndarray, np.ndarray, float]:
+    """Frecuencias, potencia de cada bin (V² eficaces de una senoidal centrada en ese bin)
+    y ENBW de la ventana (bins). Una senoidal de A V eficaces da A² en su bin."""
+    v = np.asarray(v, dtype=float)
     n = len(v)
-    w = np.hanning(n)
+    w = ventana_fft(ventana, n)
     x = np.fft.rfft((v - v.mean()) * w)
-    amp = np.abs(x) * 2 / w.sum() / math.sqrt(2)
-    amp[0] = abs(v.mean())
-    f = np.fft.rfftfreq(n, 1 / fs)
-    return f, 20 * np.log10(np.maximum(amp, 1e-7))
+    p = 2 * np.abs(x) ** 2 / np.sum(w) ** 2
+    p[0] = v.mean() ** 2
+    return np.fft.rfftfreq(n, 1 / fs), p, enbw(w)
+
+
+def a_db(p: np.ndarray) -> np.ndarray:
+    return 10 * np.log10(np.maximum(p, 10 ** (DB_MIN / 10)))
+
+
+def espectro(v: np.ndarray, fs: float, ventana: str = "Hann") -> tuple[np.ndarray, np.ndarray]:
+    """Espectro en dBV (valor eficaz de cada componente)."""
+    f, p, _ = espectro_potencia(v, fs, ventana)
+    return f, a_db(p)
+
+
+def piso_ruido(p: np.ndarray, promedios: int = 1, ancho: int | None = None) -> np.ndarray:
+    """Estimación del piso de ruido (potencia media por bin) con una mediana móvil, que no
+    se deja llevar por los picos. La mediana del ruido blanco queda por debajo de su media
+    (ln 2 sin promediar, casi 1 con muchos promedios) y se corrige."""
+    p = np.asarray(p, dtype=float)
+    n = len(p)
+    if n < 8:
+        return np.full(n, float(np.median(p)) if n else 0.0)
+    if ancho is None:
+        ancho = int(np.clip(n // 48, 9, 151))
+    ancho |= 1
+    m = ancho // 2
+    ext = np.concatenate([p[1:m + 1][::-1], p, p[-m - 1:-1][::-1]])
+    med = np.median(np.lib.stride_tricks.sliding_window_view(ext, ancho), axis=1)
+    k = max(1, int(promedios))
+    corr = math.log(2) if k == 1 else max(math.log(2), 1 - 1 / (3 * k))
+    return med / corr
+
+
+def quitar_piso(p: np.ndarray, piso: np.ndarray, fuerza: float = 2.0, resto: float = 1e-4) -> np.ndarray:
+    """Sustracción espectral: resta el piso de ruido (con un factor de sobre-resta) y deja
+    un resto muy chico donde solo había ruido. Las componentes reales casi no cambian."""
+    return np.maximum(p - fuerza * piso, resto * piso)
+
+
+def _interp_parabolica(db: np.ndarray, i: int) -> tuple[float, float]:
+    """Corrección de posición (en bins) y nivel del pico por ajuste de una parábola."""
+    if i <= 0 or i >= len(db) - 1:
+        return 0.0, float(db[i])
+    a, b, c = db[i - 1], db[i], db[i + 1]
+    den = a - 2 * b + c
+    if den >= 0:
+        return 0.0, float(b)
+    d = 0.5 * (a - c) / den
+    d = float(np.clip(d, -0.5, 0.5))
+    return d, float(b - 0.25 * (a - c) * d)
+
+
+def _centroide(p: np.ndarray, k: int, medio: int) -> float:
+    """Corrección (en bins) de la frecuencia de un pico por el centro de masa de su lóbulo.
+    Funciona con cualquier ventana, también con la flat-top (que tiene el pico plano)."""
+    a, b = max(0, k - medio), min(len(p), k + medio + 1)
+    w = p[a:b]
+    s = float(np.sum(w))
+    if s <= 0:
+        return 0.0
+    return float(np.sum(w * np.arange(a, b)) / s) - k
+
+
+def medio_lobulo(enbw_bins: float) -> int:
+    """Medio ancho (bins) del lóbulo principal, aproximado a partir del ENBW."""
+    return max(1, int(round(1.6 * enbw_bins)))
+
+
+def buscar_picos(f: np.ndarray, p: np.ndarray, piso: np.ndarray, umbral_db: float = -80.0,
+                 sobre_piso_db: float = 10.0, sep_hz: float = 0.0, max_picos: int = 10,
+                 ignorar_dc: bool = True, enbw_bins: float = 1.5) -> list[dict]:
+    """Picos del espectro (potencia p) que superan el umbral absoluto y quedan al menos
+    `sobre_piso_db` por encima del piso de ruido. Ordenados de mayor a menor nivel."""
+    db = a_db(p)
+    db_piso = a_db(piso)
+    n = len(db)
+    if n < 3:
+        return []
+    df = float(f[1] - f[0]) if n > 1 else 1.0
+    i = np.arange(1, n - 1)
+    loc = (db[i] > db[i - 1]) & (db[i] >= db[i + 1])
+    cand = i[loc]
+    if ignorar_dc:
+        cand = cand[cand >= 3]
+    cand = cand[(db[cand] >= umbral_db) & (db[cand] - db_piso[cand] >= sobre_piso_db)]
+    cand = cand[np.argsort(db[cand])[::-1]]
+    medio = medio_lobulo(enbw_bins)
+    sep = max(sep_hz, (medio + 1) * df)
+    elegidos: list[dict] = []
+    for k in cand:
+        a, b = max(0, k - medio), min(n, k + medio + 1)
+        pot = float(np.sum(p[a:b] - piso[a:b])) / enbw_bins      # Parseval: no depende del bin
+        nivel = 10 * math.log10(pot) if pot > p[k] * 0.5 else float(db[k])
+        fk = float(f[k] + _centroide(p, int(k), medio) * df)
+        if any(abs(fk - e["f"]) < sep for e in elegidos):
+            continue
+        elegidos.append({"f": fk, "db": nivel, "bin": int(k), "sobre_piso": float(db[k] - db_piso[k])})
+        if len(elegidos) >= max_picos:
+            break
+    return elegidos
+
+
+def _zona(p: np.ndarray, piso: np.ndarray, k: int, medio: int, tope: int | None = None) -> tuple[int, int]:
+    """Bins que ocupa una componente: su lóbulo principal más las «polleras» de la ventana
+    mientras sigan claramente por encima del piso de ruido."""
+    n = len(p)
+    tope = max(medio, n // 16 if tope is None else tope)
+    a, b = max(0, k - medio), min(n, k + medio + 1)
+    while a > 0 and k - a < tope and p[a - 1] > 2 * piso[a - 1]:
+        a -= 1
+    while b < n and b - k < tope and p[b] > 2 * piso[b]:
+        b += 1
+    return a, b
+
+
+def analizar_armonicos(f: np.ndarray, p: np.ndarray, piso: np.ndarray, enbw_bins: float,
+                       f0: float | None = None, n_arm: int = 10) -> dict | None:
+    """Fundamental, armónicos, THD, SNR, SINAD y ENOB a partir de la potencia por bin.
+    La potencia de una componente es la suma de su zona dividida por el ENBW (menos el ruido
+    que cae en esa zona). El ruido es todo lo demás, y bajo las zonas se estima con el piso."""
+    n = len(p)
+    if n < 16:
+        return None
+    df = float(f[1] - f[0])
+    medio = medio_lobulo(enbw_bins) + 1
+    if f0 is None:
+        k0 = int(np.argmax(p[3:])) + 3
+    else:
+        k0 = int(round(f0 / df))
+        if not 3 <= k0 < n:
+            return None
+        a, b = max(3, k0 - 2), min(n, k0 + 3)
+        k0 = a + int(np.argmax(p[a:b]))
+    f_fund = float(f[k0] + _centroide(p, k0, medio - 1) * df)
+    tope = max(medio, int(0.45 * f_fund / df))           # una zona no invade la del armónico vecino
+    usados = np.zeros(n, bool)
+    a, b = _zona(p, piso, 0, medio, tope)
+    usados[:b] = True                                           # continua
+
+    def potencia(a, b):
+        return max(float(np.sum(p[a:b]) - np.sum(piso[a:b])) / enbw_bins, 0.0)
+
+    a, b = _zona(p, piso, k0, medio, tope)
+    p_fund = potencia(a, b)
+    usados[a:b] = True
+    armonicos = []
+    for h in range(2, n_arm + 1):
+        kh = int(round(h * f_fund / df))
+        if kh >= n - 1:
+            break
+        a, b = max(0, kh - 2), min(n, kh + 3)
+        kh = a + int(np.argmax(p[a:b]))
+        a, b = _zona(p, piso, kh, medio, tope)
+        armonicos.append({"n": h, "f": float(f[kh]), "p": potencia(a, b)})
+        usados[a:b] = True
+    p_arm = sum(x["p"] for x in armonicos)
+    p_ruido = float(np.sum(p[~usados]) + np.sum(piso[usados])) / enbw_bins
+    if p_fund <= 0:
+        return None
+    thd = math.sqrt(p_arm / p_fund)
+    snr = 10 * math.log10(p_fund / max(p_ruido, 1e-30))
+    sinad = 10 * math.log10(p_fund / max(p_ruido + p_arm, 1e-30))
+    piso_med = float(np.median(piso[3:]))
+    return {"f0": f_fund, "a0": math.sqrt(p_fund), "thd": thd,
+            "thd_db": 20 * math.log10(max(thd, 1e-12)), "snr": snr, "sinad": sinad,
+            "enob": (sinad - 1.76) / 6.02, "armonicos": armonicos,
+            "piso_db": 10 * math.log10(max(piso_med, 1e-30)),
+            "densidad": math.sqrt(max(piso_med, 0.0) / (enbw_bins * df)),
+            "rbw": enbw_bins * df,
+            # con pocos períodos en pantalla los armónicos caen dentro del lóbulo del fundamental
+            "resolucion_ok": f_fund / df >= 3 * medio}
+
+
+class PromedioEspectro:
+    """Promedio de potencias de los últimos N cuadros (promedio exponencial equivalente).
+    Promediar potencias no baja el piso, pero lo vuelve parejo: desaparecen los
+    «micropicos» del ruido blanco y las componentes reales quedan quietas."""
+
+    def __init__(self):
+        self.clave = None
+        self.p = None
+        self.cuenta = 0
+
+    def reiniciar(self):
+        self.clave, self.p, self.cuenta = None, None, 0
+
+    def agregar(self, clave, p: np.ndarray, n: int) -> np.ndarray:
+        if n <= 1:
+            self.reiniciar()
+            return p
+        if clave != self.clave or self.p is None or len(self.p) != len(p):
+            self.clave, self.p, self.cuenta = clave, p.copy(), 1
+            return self.p
+        self.cuenta += 1
+        a = 1.0 / min(self.cuenta, n)
+        self.p = self.p + a * (p - self.p)
+        return self.p
+
+    @property
+    def efectivos(self) -> int:
+        return max(1, self.cuenta)
+
+
+# ---------------------------------------------------------------------------
+# Persistencia (fósforo): un trazo pasado a una grilla de puntos de pantalla
+# ---------------------------------------------------------------------------
+def rasterizar_trazo(x: np.ndarray, y: np.ndarray, cols: int, filas: int,
+                     x_max: float, y_min: float, y_max: float) -> np.ndarray:
+    """Marca en una grilla (cols × filas, índice [col, fila], fila 0 abajo) los puntos por
+    donde pasa el trazo, uniendo cada muestra con la siguiente para que los flancos y los
+    picos angostos queden marcados aunque caigan entre dos muestras."""
+    img = np.zeros((cols, filas), dtype=bool)
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x) < 2:
+        return img
+    if len(x) < 2 * cols:                          # pocas muestras: interpolar para no dejar huecos
+        xs = np.linspace(x[0], x[-1], 2 * cols)
+        y = np.interp(xs, x, y)
+        x = xs
+    cx = np.floor(x / x_max * cols).astype(np.int64)
+    fy = (y - y_min) / (y_max - y_min) * filas
+    a, b = fy[:-1], fy[1:]
+    cx = cx[:-1]
+    ok = (cx >= 0) & (cx < cols) & ~((a < 0) & (b < 0)) & ~((a >= filas) & (b >= filas))
+    lo = np.clip(np.floor(np.minimum(a, b)), 0, filas - 1).astype(np.int64)[ok]
+    hi = np.clip(np.floor(np.maximum(a, b)), 0, filas - 1).astype(np.int64)[ok]
+    cx = cx[ok]
+    if not len(cx):
+        return img
+    largo = hi - lo + 1
+    total = int(largo.sum())
+    inicio = np.repeat(np.cumsum(largo) - largo, largo)
+    filas_idx = np.repeat(lo, largo) + (np.arange(total) - inicio)
+    img[np.repeat(cx, largo), filas_idx] = True
+    return img
 
 
 # ---------------------------------------------------------------------------
@@ -432,17 +693,30 @@ def ruta_preferencias() -> Path:
 
 
 def cargar_preferencias() -> dict:
-    """{"placa": "F767", "preguntar": True}"""
-    pref = {"placa": PLACA_POR_DEFECTO, "preguntar": True}
+    """{"placa": "F767", "preguntar": True, "zoom": 1.0}"""
+    pref = {"placa": PLACA_POR_DEFECTO, "preguntar": True, "zoom": 1.0}
     try:
         d = json.loads(ruta_preferencias().read_text(encoding="utf-8"))
         if isinstance(d, dict):
             if d.get("placa") in PLACAS:
                 pref["placa"] = d["placa"]
             pref["preguntar"] = bool(d.get("preguntar", True))
+            z = d.get("zoom", 1.0)
+            if isinstance(z, (int, float)) and 0.5 <= z <= 3:
+                pref["zoom"] = float(z)
     except (OSError, ValueError, TypeError):
         pass
     return pref
+
+
+def zoom_guardado() -> float:
+    return cargar_preferencias()["zoom"]
+
+
+def guardar_zoom(zoom: float):
+    pref = cargar_preferencias()
+    pref["zoom"] = round(float(zoom), 2)
+    guardar_preferencias(pref)
 
 
 def guardar_preferencias(pref: dict):

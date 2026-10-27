@@ -33,7 +33,7 @@ class PanelGenerador(QWidget):
 
         self.hab = W.boton("", self._alternar, chequeable=True)
         self.hab.setChecked(self.c.habilitado)
-        self.hab.setMinimumHeight(34)
+        W.tam(self.hab, "setMinimumHeight", 34)
         lay.addWidget(self.hab)
 
         self.salida = W.combo([m.nombre for m in M.MODOS_SALIDA.values()],
@@ -221,7 +221,7 @@ class TabGenerador(QWidget):
         self.prev.showGrid(x=True, y=True, alpha=0.25)
         self.prev.setLabel("left", "V")
         self.prev.setLabel("bottom", "Un período (1 = período del CH1)")
-        self.prev.setMinimumWidth(360)
+        W.tam(self.prev, "setMinimumWidth", 360)
         self.curvas = {c: self.prev.plot(pen=pg.mkPen(COLORES[c], width=2)) for c in (1, 2)}
         cuerpo.addWidget(self.prev, 1)
 

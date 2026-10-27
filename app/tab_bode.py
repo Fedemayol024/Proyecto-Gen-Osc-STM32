@@ -60,7 +60,7 @@ class TabBode(QWidget):
 
         panel = QVBoxLayout()
         cont = QWidget()
-        cont.setFixedWidth(330)
+        W.tam(cont, "setFixedWidth", 330)
         cont.setLayout(panel)
         raiz.addWidget(cont)
 

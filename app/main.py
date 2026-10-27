@@ -10,8 +10,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
                                QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
                                QStatusBar, QTabWidget, QVBoxLayout, QWidget)
@@ -40,12 +40,12 @@ class DialogoPlaca(QDialog):
     def __init__(self, actual: str = M.PLACA_POR_DEFECTO, recordar: bool = False, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Elegí la placa")
-        self.setMinimumWidth(520)
+        W.tam(self, "setMinimumWidth", 520)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 20, 22, 18)
         lay.setSpacing(12)
         t = QLabel("¿Con qué placa vas a trabajar?")
-        t.setStyleSheet(f"font-size: 15pt; font-weight: 700; color: {W.TEXTO};")
+        t.setStyleSheet(f"font-size: {W.pt(15)}pt; font-weight: 700; color: {W.TEXTO};")
         lay.addWidget(t)
         lay.addWidget(W.etiqueta_tenue("Cada placa tiene su propio firmware y guarda su propia "
                                        "calibración. Podés cambiarla después desde la barra de arriba."))
@@ -55,8 +55,8 @@ class DialogoPlaca(QDialog):
         for clave, info in M.PLACAS.items():
             b = QPushButton(f"{info['nombre']}\n{info['detalle']}")
             b.setCheckable(True)
-            b.setMinimumHeight(64)
-            b.setStyleSheet("QPushButton { text-align: left; padding: 10px 14px; font-size: 11pt; }")
+            W.tam(b, "setMinimumHeight", 64)
+            b.setStyleSheet(f"QPushButton {{ text-align: left; padding: {W.px(10)}px {W.px(14)}px; font-size: {W.pt(11)}pt; }}")
             b.setChecked(clave == actual)
             b.clicked.connect(lambda _=False, c=clave: self._elegida(c))
             b.setProperty("clave", clave)
@@ -95,6 +95,23 @@ def elegir_placa(parent=None, forzar: bool = False) -> str | None:
     return dlg.placa
 
 
+class FiltroZoom(QObject):
+    """Ctrl + rueda del mouse en cualquier parte de la ventana cambia el zoom."""
+
+    def __init__(self, ventana):
+        super().__init__(ventana)
+        self.ventana = ventana
+
+    def eventFilter(self, obj, e):
+        if (e.type() == QEvent.Wheel and e.modifiers() & Qt.ControlModifier
+                and self.ventana.isActiveWindow()):
+            d = e.angleDelta().y()
+            if d:
+                self.ventana.cambiar_zoom(1 if d > 0 else -1)
+            return True
+        return False
+
+
 class Ventana(QMainWindow):
     def __init__(self, placa: str = M.PLACA_POR_DEFECTO, auto_puerto: str | None = None):
         super().__init__()
@@ -116,14 +133,14 @@ class Ventana(QMainWindow):
         # barra de conexión
         barra = QHBoxLayout()
         titulo = QLabel("◉  Instrumento")
-        titulo.setStyleSheet(f"font-size: 14pt; font-weight: 700; color: {W.TEXTO};")
+        titulo.setObjectName("titulo")
         barra.addWidget(titulo)
         self.btn_placa = W.boton(f"{nombre}  ▾", self._menu_placa)
         self.btn_placa.setToolTip("Cambiar de placa")
         barra.addWidget(self.btn_placa)
         barra.addSpacing(16)
         self.combo_puertos = QComboBox()
-        self.combo_puertos.setMinimumWidth(320)
+        W.tam(self.combo_puertos, "setMinimumWidth", 320)
         barra.addWidget(self.combo_puertos)
         barra.addWidget(W.boton("↻", self.actualizar_puertos))
         self.btn_con = W.boton("Conectar", self.alternar_conexion, primario=True)
@@ -132,7 +149,28 @@ class Ventana(QMainWindow):
         self.lbl_con.setStyleSheet(f"color: {W.TENUE};")
         barra.addWidget(self.lbl_con)
         barra.addStretch(1)
+        # zoom de la interfaz
+        lbl_zoom = QLabel("Tamaño")
+        lbl_zoom.setObjectName("tenue")
+        barra.addWidget(lbl_zoom)
+        self.btn_zoom_menos = W.boton("A−", lambda: self.cambiar_zoom(-1))
+        self.btn_zoom = W.boton("100 %", lambda: self.cambiar_zoom(0))
+        self.btn_zoom_mas = W.boton("A+", lambda: self.cambiar_zoom(+1))
+        self.btn_zoom_menos.setToolTip("Achicar la interfaz (Ctrl −, o Ctrl + rueda del mouse)")
+        self.btn_zoom.setToolTip("Volver al 100 % (Ctrl 0)")
+        self.btn_zoom_mas.setToolTip("Agrandar la interfaz (Ctrl +, o Ctrl + rueda del mouse)")
+        for b in (self.btn_zoom_menos, self.btn_zoom, self.btn_zoom_mas):
+            barra.addWidget(b)
         raiz.addLayout(barra)
+        for tecla, paso in (("Ctrl++", 1), ("Ctrl+=", 1), ("Ctrl+-", -1), ("Ctrl+0", 0)):
+            QShortcut(QKeySequence(tecla), self, lambda p=paso: self.cambiar_zoom(p))
+        self._zoom_pendiente = None
+        self._t_zoom = QTimer(self)
+        self._t_zoom.setSingleShot(True)
+        self._t_zoom.timeout.connect(self.aplicar_zoom)
+        self._filtro_zoom = FiltroZoom(self)
+        QApplication.instance().installEventFilter(self._filtro_zoom)
+        W.al_cambiar_escala(self._escala_cambiada)
 
         self._t_guardar = QTimer(self)
         self._t_guardar.setSingleShot(True)
@@ -155,6 +193,7 @@ class Ventana(QMainWindow):
 
         self.setStatusBar(QStatusBar())
         self.estado(f"Versión {VERSION}. Conectá el USB USER (CN13) del Nucleo y tocá Conectar.")
+        self._escala_cambiada()
 
         self.disp.conectado.connect(self._al_conectar)
         self.disp.desconectado.connect(lambda m: self._al_desconectar(m, W.ERROR))
@@ -169,6 +208,38 @@ class Ventana(QMainWindow):
                     self.combo_puertos.setCurrentText(et)
                     QTimer.singleShot(400, self.alternar_conexion)
                     break
+
+    # -------------------------------------------------------------- zoom
+    def cambiar_zoom(self, paso: int):
+        """paso: +1 agranda, -1 achica, 0 vuelve al 100 %. Se aplica un instante después
+        (re-dibujar toda la interfaz lleva su tiempo y así la rueda del mouse no se traba)."""
+        actual = self._zoom_pendiente or W.ESCALA
+        if paso == 0:
+            nueva = 1.0
+        else:
+            i = min(range(len(W.ZOOMS)), key=lambda k: abs(W.ZOOMS[k] - actual))
+            nueva = W.ZOOMS[max(0, min(len(W.ZOOMS) - 1, i + paso))]
+        self._zoom_pendiente = nueva
+        self.btn_zoom.setText(f"{round(nueva * 100)} %")
+        self._t_zoom.start(220)
+
+    def aplicar_zoom(self):
+        self._t_zoom.stop()
+        nueva, self._zoom_pendiente = self._zoom_pendiente, None
+        if nueva is None or abs(nueva - W.ESCALA) < 1e-6:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            W.aplicar_escala(QApplication.instance(), nueva)
+        finally:
+            QApplication.restoreOverrideCursor()
+        M.guardar_zoom(nueva)
+
+    def _escala_cambiada(self):
+        self.btn_zoom.setText(f"{round(W.ESCALA * 100)} %")
+        W.escalar_graficos(self)
+        for w in self.findChildren(QWidget):
+            w.update()
 
     # -------------------------------------------------------------- placa
     def _menu_placa(self):
@@ -190,6 +261,7 @@ class Ventana(QMainWindow):
         app = QApplication.instance()
         app._ventana = nueva
         nueva.show()
+        self.setAttribute(Qt.WA_DeleteOnClose)       # que la ventana vieja no quede viva
         self.close()
 
     # -------------------------------------------------------------- estado
@@ -314,6 +386,9 @@ class Ventana(QMainWindow):
             self.tab_osc.al_recibir(d)
 
     def closeEvent(self, e):
+        self.tab_osc.fosforo.timer.stop()
+        if self.tab_osc.dlg_fft is not None:
+            self.tab_osc.dlg_fft.close()
         self.guardar_config()
         if self.disp.esta_conectado:
             self.disp.enviar("CAPX")
@@ -323,7 +398,8 @@ class Ventana(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setStyleSheet(W.ESTILO)
+    W.ESCALA = M.zoom_guardado()
+    app.setStyleSheet(W.estilo())
     ico = recurso("icono.ico")
     if Path(ico).exists():
         app.setWindowIcon(QIcon(ico))

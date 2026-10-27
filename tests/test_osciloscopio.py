@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
 import numpy as np  # noqa: E402
 
 try:
+    from PySide6.QtCore import QEvent
     from PySide6.QtWidgets import QApplication, QFileDialog
     HAY_QT = True
 except ImportError:      # pragma: no cover
@@ -25,6 +26,7 @@ if HAY_QT:
     import main as A  # noqa: E402
     import modelo as M  # noqa: E402
     import tab_osciloscopio as TO  # noqa: E402
+    import widgets as W  # noqa: E402
 
     _app = QApplication.instance() or QApplication(sys.argv)
 
@@ -45,7 +47,10 @@ class TestPestanaOsciloscopio(unittest.TestCase):
 
     def tearDown(self):
         QFileDialog.getSaveFileName = self._guardar
+        W.aplicar_escala(_app, 1.0)
         self.v.close()
+        self.v.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         if self._appdata is None:
             os.environ.pop("APPDATA", None)
         else:
@@ -142,6 +147,107 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         np.testing.assert_allclose(forma, self.osc.ultimo[1][i0:i1], rtol=1e-4, atol=1e-5)
 
     # --------------------------------------------------------------- tiempo equivalente
+    # --------------------------------------------------------------- persistencia
+    def _cuadro_con_glitch(self, glitch: bool):
+        d = self._cuadro()
+        d["ch2"] = np.full(d["n"], 2048, np.uint16)
+        if glitch:
+            i = d["pre"] + 300                                  # 0,3 div después del disparo
+            d["ch1"] = d["ch1"].copy()
+            d["ch1"][i:i + 3] = 4000
+        return d
+
+    def _filas_glitch(self):
+        """Columnas y filas de la imagen donde cae el pico del transitorio (CH1 a ~+7 div, recortado)."""
+        f = self.osc.fosforo
+        col = int((5 + 0.3 * 0.5) / TO.DIV_X * f.COLS)          # 1 ms/div, 200 kS/s: 300 muestras = 1,5 ms
+        return f.buf[1][col - 3:col + 12, int(0.97 * f.FILAS):]
+
+    def test_persistencia_retiene_un_transitorio_y_lo_apaga(self):
+        self.osc.persistencia.setCurrentIndex(TO.PERSISTENCIAS.index("1 s"))
+        self.osc._mostrar(self._cuadro_con_glitch(True))
+        for _ in range(5):
+            self.osc._mostrar(self._cuadro_con_glitch(False))
+        self.assertGreater(float(self._filas_glitch().max()), 0.3)         # sigue marcado
+        self.osc.fosforo._tic()
+        self.assertIsNotNone(self.osc.fosforo.img.image)
+        self.osc.fosforo._t -= 2.0                                           # pasaron 2 s
+        self.osc.fosforo._tic()
+        self.assertEqual(float(self._filas_glitch().max()), 0.0)            # ya se apagó
+
+    def test_persistencia_infinita_no_se_apaga_y_se_borra_al_cambiar_escala(self):
+        self.osc.persistencia.setCurrentIndex(TO.PERSISTENCIAS.index("Infinita"))
+        self.osc._mostrar(self._cuadro_con_glitch(True))
+        self.osc.fosforo._t -= 60.0
+        self.osc.fosforo._tic()
+        self.assertGreater(float(self._filas_glitch().max()), 0.3)
+        self.osc.canales[1].vdiv.setCurrentIndex(self.osc.canales[1].vdiv.currentIndex() + 1)
+        self.assertFalse(self.osc.fosforo.buf[1].any())
+
+    def test_persistencia_desactivada_no_acumula(self):
+        self.osc.persistencia.setCurrentIndex(0)
+        self.osc._mostrar(self._cuadro_con_glitch(True))
+        self.assertFalse(self.osc.fosforo.buf[1].any())
+
+    # --------------------------------------------------------------- FFT
+    def test_analisis_fft_detecta_picos_y_umbral(self):
+        self.osc.tdiv.setCurrentIndex(TO.TDIVS.index(10e-3))         # 20 kS/s, 2000 puntos
+        n, pre, fs, *_ = self.osc.parametros_captura()
+        t = np.arange(n) / fs
+        v = 2048 + 1200 * np.sin(2 * np.pi * 1000 * t) + 40 * np.sin(2 * np.pi * 3000 * t)
+        v += np.random.default_rng(2).normal(0, 1.5, n)
+        d = {"n": n, "pre": pre, "fs": fs, "disparado": 1, "ch1": np.rint(v).astype(np.uint16),
+             "ch2": np.full(n, 2048, np.uint16)}
+        self.osc.canales[2].visible.setChecked(False)
+        self.osc.abrir_analisis_fft()
+        dlg = self.osc.dlg_fft
+        self.assertTrue(self.osc.chk_fft.isChecked())
+        self.osc._t_dlg_fft = 0
+        self.osc._mostrar(d)
+        self.assertGreaterEqual(len(dlg.picos), 2)
+        self.assertAlmostEqual(dlg.picos[0]["f"], 1000, delta=1)
+        self.assertEqual(dlg.picos[0]["armonico"], 1)
+        self.assertEqual(dlg.picos[1]["armonico"], 3)
+        self.assertEqual(dlg.tabla.rowCount(), len(dlg.picos))
+        self.assertAlmostEqual(dlg.analisis["thd"], 40 / 1200, delta=0.003)
+        # subir el umbral por encima del 3er armónico deja solo el fundamental
+        nivel_3 = dlg.picos[1]["db"]
+        dlg.umbral.setValue(nivel_3 + 3)
+        self.osc._t_dlg_fft = 0
+        self.osc._mostrar(d)
+        self.assertEqual(len(dlg.picos), 1)
+        self.assertAlmostEqual(self.osc.linea_umbral.value(), nivel_3 + 3, delta=0.05)
+        # eliminar el piso de ruido no mueve los picos
+        x, y = self.osc.curvas_fft[1].getData()
+        mediana_antes = float(np.median(y))
+        dlg.ruido.setCurrentIndex(2)
+        dlg.promedio.setCurrentIndex(2)
+        for _ in range(8):
+            self.osc._mostrar(d)
+        x, y = self.osc.curvas_fft[1].getData()
+        self.assertLess(float(np.median(y)), mediana_antes - 30)  # el piso bajó más de 30 dB
+        self.assertGreater(float(np.max(y)), -10)                  # el fundamental sigue ahí
+        self.assertEqual(self.osc.estado_config()["fft"]["ruido"], 2)
+
+    # --------------------------------------------------------------- zoom
+    def test_zoom_agranda_y_vuelve(self):
+        scroll = self.osc.findChild(TO.QScrollArea)
+        ancho = scroll.width()
+        self.v.cambiar_zoom(+1)
+        self.v.aplicar_zoom()
+        self.assertAlmostEqual(W.ESCALA, 1.1)
+        self.assertEqual(scroll.width(), W.px(340))
+        self.assertEqual(self.v.btn_zoom.text(), "110 %")
+        self.assertIn(f"{W.pt(10)}pt", _app.styleSheet())
+        self.assertEqual(M.zoom_guardado(), 1.1)
+        self.v.cambiar_zoom(+1)
+        self.v.cambiar_zoom(+1)                                   # dos pasos seguidos: 125 % → 140 %
+        self.assertEqual(self.v.btn_zoom.text(), "140 %")
+        self.v.cambiar_zoom(0)
+        self.v.aplicar_zoom()
+        self.assertEqual(scroll.width(), ancho)
+        self.assertEqual(M.zoom_guardado(), 1.0)
+
     def test_sin_canales_visibles_no_exporta(self):
         self.osc._mostrar(self._cuadro())
         for c in (1, 2):

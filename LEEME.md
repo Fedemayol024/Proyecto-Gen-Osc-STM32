@@ -5,7 +5,7 @@ Una sola app de PC y una placa **NUCLEO-F767ZI** o **NUCLEO-F429ZI** forman un p
 | Función | Qué hace | Pines |
 |---|---|---|
 | **Generador de 2 canales** | DAC de 12 bits a 1 MS/s, hasta ~100 kHz útiles. Formas: seno, cuadrada (ciclo útil), triangular (simetría), sierra, continua, ruido y arbitraria (desde CSV). Fase relativa exacta entre canales. Modulación **AM/FM** y **barrido** lineal o logarítmico. | PA4 (D24), PA5 (D13) |
-| **Osciloscopio de 2 canales** | ADC de 12 bits, los dos canales muestreados en el mismo instante, hasta ~1,6 MS/s. Disparo por flanco y nivel (Auto / Normal / Único), mediciones automáticas, cursores, **FFT**, modo **XY**, autoset, exportación a CSV y PNG. | PA3 (A0), PC0 (A1) |
+| **Osciloscopio de 2 canales** | ADC de 12 bits, los dos canales muestreados en el mismo instante, hasta ~1,6 MS/s. Disparo por flanco y nivel (Auto / Normal / Único), mediciones automáticas, cursores, **persistencia tipo fósforo**, **FFT con análisis de picos** (THD, SNR, eliminación del piso de ruido), modo **XY**, autoset, exportación a CSV y PNG. | PA3 (A0), PC0 (A1) |
 | **Analizador de Bode** | Barre la frecuencia con el generador y mide ganancia (dB) y fase (°) del circuito. Detecta la frecuencia de corte a −3 dB. | Generador + osciloscopio |
 | **Frecuencímetro** | Conteo de flancos (hasta decenas de MHz) o método recíproco (frecuencias bajas con muchas cifras). Elige el método solo. | PA0 (D32) |
 | **PWM complementario** | Hasta decenas de MHz, ciclo útil y **tiempo muerto** ajustables (ns), para puentes H e inversores. | PE9 (D6), PE8 (D42) |
@@ -129,12 +129,18 @@ Para crear el `.exe`, hacé doble clic en `app/build_exe.bat`. Necesita Python 3
    - **RUN/STOP**, **Único** y **Autoset**.
    - Tiempo/div, V/div y posición. La línea naranja de disparo se puede arrastrar.
    - En **Entrada** elegí "Placa ±10 V", "Placa ±1 V (×10)" (tiene que coincidir con la llave S2/S4 de la placa) o "Pin directo".
+   - **Pantalla → Persistencia** (1 s, 2 s, 3 s o Infinita): deja el rastro de los trazos anteriores como el fósforo de un osciloscopio analógico. Un transitorio que aparece una sola vez queda marcado ese tiempo, o para siempre en *Infinita*; lo que se repite brilla más. *Borrar* lo limpia, y se borra solo al cambiar escalas.
+   - **Pantalla → Espectro (FFT) → Análisis de picos…** abre una ventana que se actualiza en vivo:
+     - *Procesamiento:* ventana (Blackman-Harris, Flat-top, Hann, Hamming, Rectangular), **promediado** de 4 a 64 cuadros (el ruido se vuelve parejo y desaparecen los micropicos) y **Eliminar piso de ruido** (suave o fuerte): estima el piso con una mediana móvil y lo resta, así quedan solo las componentes reales.
+     - *Detección:* umbral absoluto (también se arrastra la línea punteada del gráfico), cuánto tiene que sobresalir del piso, separación mínima y máximo de picos. Los picos se marcan y numeran en el gráfico.
+     - *Mediciones:* fundamental, THD, SNR, SINAD, ENOB, piso y densidad de ruido, RBW, y una tabla de picos con nivel (dBV y V eficaces), dBc y número de armónico. Se exporta a CSV.
 4. **Bode:** conectá Generador CH1 → entrada del circuito y IN1, y la salida del circuito → IN2. Elegí el rango y tocá *Iniciar barrido*.
 5. **Frecuencímetro y PWM:** lectura grande con el método usado. El PWM muestra los valores reales obtenidos.
 6. **Calibración** (una vez):
    - **Salidas:** con multímetro, dos puntos por canal.
    - **Entradas:** automática, conectando OUT1→IN1 y OUT2→IN2. También hay un "cero" con las entradas a GND.
-7. **Placa:** capacidades y límites de la placa elegida (con los valores medidos en vivo al conectar), un dibujo de la placa con la ubicación de cada pin que usa el instrumento y diagramas de conexión para los usos típicos (prueba rápida, Bode, señal externa, frecuencímetro y PWM).
+7. **Tamaño de la interfaz:** botones **A− / A+** arriba a la derecha (o **Ctrl +**, **Ctrl −**, **Ctrl 0**, o **Ctrl + rueda del mouse**). Agranda o achica todo, de 80 % a 200 %, y se recuerda para la próxima vez.
+8. **Placa:** capacidades y límites de la placa elegida (con los valores medidos en vivo al conectar), un dibujo de la placa con la ubicación de cada pin que usa el instrumento y diagramas de conexión para los usos típicos (prueba rápida, Bode, señal externa, frecuencímetro y PWM).
 
 Las calibraciones y los ajustes se guardan en `%APPDATA%\InstrumentoF767\`: `config.json` para la F767ZI y `config_F429.json` para la F429ZI. La placa elegida se guarda en `preferencias.json`.
 

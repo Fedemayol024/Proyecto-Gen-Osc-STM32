@@ -8,9 +8,10 @@ import time
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QDialog, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QLabel,
-                               QScrollArea, QSlider, QVBoxLayout, QWidget)
+from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtWidgets import (QAbstractItemView, QDialog, QCheckBox, QDoubleSpinBox, QFileDialog,
+                               QGridLayout, QHBoxLayout, QHeaderView, QLabel, QScrollArea, QSlider,
+                               QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 import modelo as M
 import widgets as W
@@ -90,6 +91,337 @@ class DialogoExportarImagen(QDialog):
         if self.chk_ch2.isChecked(): canales.append(2)
         meds = [clave for clave, chk in self.chks_med.items() if chk.isChecked()]
         return canales, meds
+
+# ---------------------------------------------------------------------------
+# Persistencia tipo fósforo
+# ---------------------------------------------------------------------------
+PERSISTENCIAS = ["Desactivada", "1 s", "2 s", "3 s", "Infinita"]
+TIEMPOS_PERSIST = [0.0, 1.0, 2.0, 3.0, math.inf]
+
+
+def _lut_canal(color: str) -> np.ndarray:
+    """Tabla intensidad → RGBA: lo visitado una sola vez se ve tenue, lo repetido brilla."""
+    c = QColor(color)
+    base = np.array([c.red(), c.green(), c.blue()], float)
+    v = np.arange(256) / 255.0
+    lut = np.zeros((256, 4), np.uint8)
+    lut[:, :3] = np.clip(base * (0.8 + 0.2 * v[:, None]) + (255 - base) * 0.35 * v[:, None] ** 2, 0, 255)
+    lut[:, 3] = np.where(v > 0.004, 105 + 150 * np.sqrt(v), 0)     # lo raro también se ve claro
+    lut[lut[:, 3] == 0, :3] = 0
+    return lut
+
+
+class Fosforo:
+    """Imagen que acumula los trazos de cada canal y se va apagando con el tiempo elegido,
+    como el fósforo de un osciloscopio analógico. Un transitorio que aparece en un solo
+    cuadro queda marcado (tenue) durante ese tiempo, o para siempre en «Infinita»."""
+    COLS, FILAS = 1000, 640          # 100 × 80 puntos por división
+    APAGADO = 3.2                    # e^-3,2 ≈ 4 %: a los T segundos el trazo casi no se ve
+
+    def __init__(self, plot):
+        self.img = pg.ImageItem()
+        self.img.setZValue(-5)
+        plot.addItem(self.img)
+        self.buf = {c: np.zeros((self.COLS, self.FILAS), np.float32) for c in (1, 2)}
+        self.vivo = {1: False, 2: False}
+        self.luts = {c: _lut_canal(COLORES[c]).view(np.uint32).ravel() for c in (1, 2)}
+        self.tiempo = 0.0
+        self.sucio = False
+        self._t = time.monotonic()
+        self.timer = QTimer()
+        self.timer.timeout.connect(self._tic)
+
+    @property
+    def activo(self) -> bool:
+        return self.tiempo > 0
+
+    def set_tiempo(self, t: float):
+        self.tiempo = t
+        self.borrar()
+        if t > 0:
+            self._t = time.monotonic()
+            self.timer.start(80)
+        else:
+            self.timer.stop()
+
+    def borrar(self, canal: int | None = None):
+        for c in ((canal,) if canal else (1, 2)):
+            if self.vivo[c]:
+                self.buf[c].fill(0)
+                self.vivo[c] = False
+                self.sucio = True
+        if not any(self.vivo.values()):
+            self.img.clear()
+            self.sucio = False
+
+    def agregar(self, canal: int, x: np.ndarray, y: np.ndarray):
+        if not self.activo:
+            return
+        marca = M.rasterizar_trazo(x, y, self.COLS, self.FILAS, DIV_X, -DIV_Y / 2, DIV_Y / 2)
+        b = self.buf[canal]
+        b[marca] = np.minimum(1.0, b[marca] + 0.45)
+        self.vivo[canal] = True
+        self.sucio = True
+
+    def _tic(self):
+        ahora = time.monotonic()
+        dt, self._t = ahora - self._t, ahora
+        if math.isfinite(self.tiempo):
+            k = math.exp(-self.APAGADO * dt / self.tiempo)
+            for c in (1, 2):
+                if self.vivo[c]:
+                    b = self.buf[c]
+                    b *= k
+                    b[b < 1 / 255] = 0
+                    if not b.any():
+                        self.vivo[c] = False
+                    self.sucio = True
+        if self.sucio:
+            self.dibujar()
+
+    def dibujar(self):
+        self.sucio = False
+        out = None
+        for c in (1, 2):
+            if self.vivo[c]:
+                col = np.take(self.luts[c], (self.buf[c] * 255).astype(np.uint8))   # RGBA en un uint32
+                if out is None:
+                    out = col
+                else:                       # donde se cruzan, gana el canal más intenso
+                    out = np.where((col >> 24) > (out >> 24), col, out)
+        if out is None:
+            self.img.clear()
+        else:
+            self.img.setImage(out.view(np.uint8).reshape(self.COLS, self.FILAS, 4), autoLevels=False)
+            self.img.setRect(QRectF(0, -DIV_Y / 2, DIV_X, DIV_Y))
+
+
+# ---------------------------------------------------------------------------
+# Análisis del espectro (FFT)
+# ---------------------------------------------------------------------------
+PROMEDIOS_FFT = [("Desactivado", 1), ("4 cuadros", 4), ("8 cuadros", 8), ("16 cuadros", 16),
+                 ("32 cuadros", 32), ("64 cuadros", 64)]
+RUIDO_FFT = [("No eliminar", 0.0), ("Eliminar piso de ruido (suave)", 1.5),
+             ("Eliminar piso de ruido (fuerte)", 3.0)]
+RANGOS_FFT = [("−140 a +20 dBV", -140), ("−120 a +20 dBV", -120), ("−100 a +20 dBV", -100),
+              ("−80 a +20 dBV", -80)]
+FFT_POR_DEFECTO = {"ventana": "Blackman-Harris", "promedio": 0, "ruido": 0, "rango": 2, "canal": 1,
+                   "umbral": -80.0, "sobre_piso": 10.0, "sep": 0.0, "max_picos": 10, "marcar": True,
+                   "ignorar_dc": True}
+
+
+class DialogoFFT(QDialog):
+    """Ventana (no modal) de análisis del espectro: procesamiento, umbrales de detección,
+    tabla de picos y mediciones de distorsión y ruido. Se actualiza en vivo."""
+
+    def __init__(self, tab):
+        super().__init__(tab)
+        self.tab = tab
+        self.setWindowTitle("Análisis de espectro (FFT)")
+        W.tam(self, "resize", 760, 640)
+        c = tab.fft_cfg
+        raiz = QVBoxLayout(self)
+
+        arriba = QHBoxLayout()
+        g, lay = W.grupo("Procesamiento")
+        self.ventana = W.combo(M.VENTANAS, c["ventana"])
+        self.promedio = W.combo([t for t, _ in PROMEDIOS_FFT])
+        self.promedio.setCurrentIndex(c["promedio"])
+        self.ruido = W.combo([t for t, _ in RUIDO_FFT])
+        self.ruido.setCurrentIndex(c["ruido"])
+        self.rango = W.combo([t for t, _ in RANGOS_FFT])
+        self.rango.setCurrentIndex(c["rango"])
+        lay.addWidget(W.fila("Ventana", self.ventana, ayuda=(
+            "Blackman-Harris: mejor para ver señales chicas al lado de grandes y medir SNR/THD.\n"
+            "Flat-top: la amplitud más exacta. Hann: uso general. Rectangular: solo para señales "
+            "que entran justo en la pantalla.")))
+        lay.addWidget(W.fila("Promediado", self.promedio, ayuda=(
+            "Promedia la potencia de varios cuadros: el ruido se vuelve parejo (desaparecen los "
+            "micropicos) y las componentes reales quedan quietas. Suaviza la lectura.")))
+        lay.addWidget(W.fila("Ruido blanco", self.ruido, ayuda=(
+            "Estima el piso de ruido con una mediana móvil y lo resta (sustracción espectral). "
+            "Quedan solo las componentes que sobresalen del ruido. Funciona mejor con promediado.")))
+        lay.addWidget(W.fila("Escala vertical", self.rango))
+        fila = QHBoxLayout()
+        fila.addStretch(1)
+        fila.addWidget(W.boton("Reiniciar promedio", tab.reiniciar_promedio_fft))
+        lay.addLayout(fila)
+        arriba.addWidget(g, 1)
+
+        g, lay = W.grupo("Detección de picos")
+        self.canal = W.combo(["CH1", "CH2"], f"CH{c['canal']}")
+        self.umbral = QDoubleSpinBox()
+        self.umbral.setRange(-160, 40)
+        self.umbral.setDecimals(1)
+        self.umbral.setSingleStep(1)
+        self.umbral.setSuffix(" dBV")
+        self.umbral.setValue(c["umbral"])
+        self.sobre = QDoubleSpinBox()
+        self.sobre.setRange(0, 100)
+        self.sobre.setDecimals(1)
+        self.sobre.setSuffix(" dB")
+        self.sobre.setValue(c["sobre_piso"])
+        self.sep = W.EntradaSI("Hz", 0, 10e6, c["sep"], 4, 100)
+        self.max_picos = QSpinBox()
+        self.max_picos.setRange(1, 50)
+        self.max_picos.setValue(c["max_picos"])
+        self.marcar = QCheckBox("Marcar en el gráfico")
+        self.marcar.setChecked(c["marcar"])
+        self.ignorar_dc = QCheckBox("Ignorar la continua")
+        self.ignorar_dc.setChecked(c["ignorar_dc"])
+        lay.addWidget(W.fila("Canal", self.canal))
+        lay.addWidget(W.fila("Umbral absoluto", self.umbral,
+                             ayuda="Solo se detectan picos por encima de este nivel. También se puede "
+                                   "arrastrar la línea punteada del gráfico."))
+        lay.addWidget(W.fila("Sobre el piso", self.sobre,
+                             ayuda="Cuánto tiene que sobresalir un pico del piso de ruido local."))
+        lay.addWidget(W.fila("Separación mínima", self.sep,
+                             ayuda="Dos picos más cercanos que esto cuentan como uno (0 = automática)."))
+        lay.addWidget(W.fila("Máximo de picos", self.max_picos))
+        f2 = QHBoxLayout()
+        f2.addWidget(self.marcar)
+        f2.addWidget(self.ignorar_dc)
+        lay.addLayout(f2)
+        arriba.addWidget(g, 1)
+        raiz.addLayout(arriba)
+
+        g, lay = W.grupo("Mediciones")
+        self.resumen = QGridLayout()
+        self.resumen.setHorizontalSpacing(W.px(16))
+        self.valores = {}
+        claves = [("f0", "Fundamental"), ("a0", "Nivel"), ("thd", "THD"), ("snr", "SNR"),
+                  ("sinad", "SINAD"), ("enob", "ENOB"), ("piso", "Piso de ruido"),
+                  ("dens", "Densidad"), ("rbw", "RBW"), ("prom", "Promedios")]
+        for i, (k, t) in enumerate(claves):
+            fila_r, col = divmod(i, 5)
+            lt = W.etiqueta_tenue(t)
+            lt.setWordWrap(False)
+            lv = QLabel("—")
+            lv.setFont(W.MONO)
+            self.resumen.addWidget(lt, fila_r * 2, col)
+            self.resumen.addWidget(lv, fila_r * 2 + 1, col)
+            self.valores[k] = lv
+        lay.addLayout(self.resumen)
+        self.aviso = W.etiqueta_tenue("")
+        lay.addWidget(self.aviso)
+        raiz.addWidget(g)
+
+        self.tabla = QTableWidget(0, 7)
+        self.tabla.setHorizontalHeaderLabels(["#", "Frecuencia", "Nivel", "V eficaz", "dBc",
+                                              "Sobre piso", "Armónico"])
+        self.tabla.verticalHeader().setVisible(False)
+        self.tabla.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tabla.setSelectionMode(QAbstractItemView.NoSelection)
+        self.tabla.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tabla.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        raiz.addWidget(self.tabla, 1)
+
+        abajo = QHBoxLayout()
+        abajo.addWidget(W.etiqueta_tenue("Los niveles son valores eficaces (dBV = dB respecto de 1 V eficaz). "
+                                         "dBc: respecto del pico mayor."), 1)
+        abajo.addWidget(W.boton("Exportar CSV", self._exportar))
+        abajo.addWidget(W.boton("Cerrar", self.close))
+        raiz.addLayout(abajo)
+
+        for w in (self.ventana, self.promedio, self.ruido, self.rango, self.canal):
+            w.currentIndexChanged.connect(self._cambio)
+        for w in (self.umbral, self.sobre):
+            w.valueChanged.connect(self._cambio)
+        self.max_picos.valueChanged.connect(self._cambio)
+        self.sep.cambiado.connect(self._cambio)
+        for w in (self.marcar, self.ignorar_dc):
+            w.toggled.connect(self._cambio)
+        self.picos, self.analisis = [], None
+
+    def _cambio(self, *_):
+        c = self.tab.fft_cfg
+        reiniciar = (c["ventana"] != self.ventana.currentText()
+                     or c["promedio"] != self.promedio.currentIndex())
+        c.update({"ventana": self.ventana.currentText(), "promedio": self.promedio.currentIndex(),
+                  "ruido": self.ruido.currentIndex(), "rango": self.rango.currentIndex(),
+                  "canal": self.canal.currentIndex() + 1, "umbral": self.umbral.value(),
+                  "sobre_piso": self.sobre.value(), "sep": self.sep.valor(),
+                  "max_picos": self.max_picos.value(), "marcar": self.marcar.isChecked(),
+                  "ignorar_dc": self.ignorar_dc.isChecked()})
+        self.tab.fft_cambiada(reiniciar)
+
+    def set_umbral(self, v: float):
+        self.umbral.blockSignals(True)
+        self.umbral.setValue(v)
+        self.umbral.blockSignals(False)
+
+    def mostrar(self, picos: list, analisis: dict | None, promedios: tuple[int, int]):
+        self.picos, self.analisis = picos, analisis
+        v = self.valores
+        a = analisis
+        if a:
+            v["f0"].setText(M.si(a["f0"], "Hz", 6))
+            v["a0"].setText(f"{20 * math.log10(max(a['a0'], 1e-12)):.2f} dBV".replace(".", ",").replace("-", "−"))
+            if a["resolucion_ok"]:
+                v["thd"].setText(f"{a['thd'] * 100:.3g} %  ({a['thd_db']:.1f} dB)".replace(".", ",").replace("-", "−"))
+                v["sinad"].setText(f"{a['sinad']:.1f} dB".replace(".", ",").replace("-", "−"))
+                v["enob"].setText(f"{a['enob']:.2f} bits".replace(".", ",").replace("-", "−"))
+                self.aviso.setText("")
+            else:
+                for k in ("thd", "sinad", "enob"):
+                    v[k].setText("—")
+                self.aviso.setText("Hay pocos períodos en pantalla y los armónicos quedan pegados al "
+                                   "fundamental: subí el tiempo/div para medir THD, SINAD y ENOB.")
+            v["snr"].setText(f"{a['snr']:.1f} dB".replace(".", ",").replace("-", "−"))
+            v["piso"].setText(f"{a['piso_db']:.1f} dBV".replace(".", ",").replace("-", "−"))
+            v["dens"].setText(M.si(a["densidad"], "V/√Hz", 3))
+            v["rbw"].setText(M.si(a["rbw"], "Hz", 3))
+        else:
+            for k in v:
+                v[k].setText("—")
+        v["prom"].setText(f"{promedios[0]} de {promedios[1]}")
+        self.tabla.setRowCount(len(picos))
+        ref = picos[0]["db"] if picos else 0.0
+        for i, pk in enumerate(picos):
+            arm = pk.get("armonico")
+            celdas = [str(i + 1), M.si(pk["f"], "Hz", 6),
+                      f"{pk['db']:.2f} dBV".replace(".", ",").replace("-", "−"),
+                      M.si(10 ** (pk["db"] / 20), "V", 4),
+                      f"{pk['db'] - ref:.1f}".replace(".", ",").replace("-", "−"),
+                      f"{pk['sobre_piso']:.1f} dB".replace(".", ","),
+                      ("fundamental" if arm == 1 else f"{arm}º") if arm else "—"]
+            for j, t in enumerate(celdas):
+                it = self.tabla.item(i, j)
+                if it is None:
+                    it = QTableWidgetItem()
+                    it.setTextAlignment(Qt.AlignCenter)
+                    self.tabla.setItem(i, j, it)
+                it.setText(t)
+
+    def _exportar(self):
+        if not self.picos:
+            self.tab.v.estado("No hay picos detectados para exportar.", W.ALERTA)
+            return
+        ruta, _ = QFileDialog.getSaveFileName(self, "Exportar picos", "picos_fft.csv", "CSV (*.csv)")
+        if not ruta:
+            return
+        try:
+            with open(ruta, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f, delimiter=";")
+                w.writerow(["n", "frecuencia_Hz", "nivel_dBV", "v_eficaz_V", "dBc", "sobre_piso_dB", "armonico"])
+                ref = self.picos[0]["db"]
+                for i, pk in enumerate(self.picos, 1):
+                    w.writerow([i, M.num_csv(pk["f"], ".9g"), M.num_csv(pk["db"], ".4f"),
+                                M.num_csv(10 ** (pk["db"] / 20)), M.num_csv(pk["db"] - ref, ".3f"),
+                                M.num_csv(pk["sobre_piso"], ".2f"), pk.get("armonico") or ""])
+                a = self.analisis
+                if a:
+                    w.writerow([])
+                    for k, val in (("fundamental_Hz", a["f0"]), ("thd_pct", a["thd"] * 100),
+                                   ("snr_dB", a["snr"]), ("sinad_dB", a["sinad"]), ("enob_bits", a["enob"]),
+                                   ("piso_dBV", a["piso_db"]), ("densidad_V_raizHz", a["densidad"]),
+                                   ("rbw_Hz", a["rbw"])):
+                        w.writerow([k, M.num_csv(val, ".6g")])
+        except OSError as e:
+            self.tab.v.estado(f"No se pudo guardar {ruta}: {e.strerror or e}", W.ERROR)
+            return
+        self.tab.v.estado(f"Guardado: {ruta}", W.OK)
+
 
 class PanelCanal(QWidget):
     def __init__(self, canal: int, cfg: dict, al_cambiar):
@@ -178,6 +510,7 @@ class TabOsciloscopio(QWidget):
         self.plot.addItem(pg.InfiniteLine(pos=DIV_X / 2, angle=90, pen=pg.mkPen("#3b4654", width=1)))
         self.plot.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen("#3b4654", width=1)))
         self.curvas = {c: curva_rapida(self.plot, COLORES[c]) for c in (1, 2)}
+        self.fosforo = Fosforo(self.plot)
         self.curva_xy = self.plot.plot(pen=pg.mkPen("#a5d6ff", width=1), antialias=False,
                                        skipFiniteCheck=True)
 
@@ -220,9 +553,23 @@ class TabOsciloscopio(QWidget):
         self.plot_fft.setLabel("bottom", "Frecuencia")
         self.plot_fft.setLabel("left", "dBV")
         self.plot_fft.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_fft.setYRange(-100, 20)
         self.plot_fft.setLogMode(x=True, y=False)
         self.curvas_fft = {c: curva_rapida(self.plot_fft, COLORES[c]) for c in (1, 2)}
+        self.fft_cfg = dict(FFT_POR_DEFECTO)
+        self.fft_cfg.update({k: v for k, v in cfg.get("fft", {}).items() if k in FFT_POR_DEFECTO})
+        self.prom_fft = {c: M.PromedioEspectro() for c in (1, 2)}
+        self.fft_ult = {1: None, 2: None}
+        self.dlg_fft = None
+        self._t_dlg_fft = 0.0
+        self.marcas_fft = self.plot_fft.plot([], [], pen=None, symbol="t", symbolSize=11,
+                                             symbolPen=pg.mkPen(W.TEXTO, width=1), symbolBrush=W.ALERTA)
+        self.textos_fft = []
+        self.linea_umbral = pg.InfiniteLine(angle=0, movable=True,
+                                            pen=pg.mkPen(W.ALERTA, width=1, style=Qt.DashLine))
+        self.linea_umbral.setZValue(5)
+        self.linea_umbral.sigPositionChangeFinished.connect(self._umbral_arrastrado)
+        self.plot_fft.addItem(self.linea_umbral)
+        self._aplicar_rango_fft()
         self.plot_fft.setVisible(False)
         izq.addWidget(self.plot_fft, 2)
 
@@ -254,7 +601,7 @@ class TabOsciloscopio(QWidget):
         # ------------------------------------------------ controles
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(340)
+        W.tam(scroll, "setFixedWidth", 340)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         panel = QWidget()
         pl = QVBoxLayout(panel)
@@ -266,7 +613,7 @@ class TabOsciloscopio(QWidget):
         self.btn_run = W.boton("RUN", self._alternar_run)
         self.btn_run.setObjectName("run")
         self.btn_run.setProperty("corriendo", "false")
-        self.btn_run.setMinimumHeight(38)
+        W.tam(self.btn_run, "setMinimumHeight", 38)
         self.btn_unico = W.boton("Único", self._unico)
         self.btn_auto = W.boton("Autoset", self._autoset)
         for b in (self.btn_run, self.btn_unico, self.btn_auto):
@@ -329,12 +676,34 @@ class TabOsciloscopio(QWidget):
         pl.addWidget(g)
 
         g, lay = W.grupo("Pantalla")
+        self.persistencia = W.combo(PERSISTENCIAS)
+        self.persistencia.setCurrentIndex(int(cfg.get("persistencia", 0)))
+        self.persistencia.currentIndexChanged.connect(self._cambio_persistencia)
+        fila_p = QHBoxLayout()
+        fila_p.addWidget(self.persistencia, 1)
+        fila_p.addWidget(W.boton("Borrar", lambda: self.fosforo.borrar()))
+        cont_p = QWidget()
+        cont_p.setLayout(fila_p)
+        fila_p.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(W.fila("Persistencia", cont_p, ayuda=(
+            "Deja el rastro de los trazos anteriores, como el fósforo de un osciloscopio analógico: "
+            "un transitorio que aparece una sola vez queda marcado ese tiempo (o para siempre en "
+            "«Infinita»). Lo que se repite brilla más. Se borra al cambiar las escalas.")))
         self.modo_xy = QCheckBox("Modo XY (CH1 horizontal, CH2 vertical)")
         self.chk_fft = QCheckBox("Espectro (FFT)")
         self.chk_cur = QCheckBox("Cursores")
         for c in (self.modo_xy, self.chk_fft, self.chk_cur):
             c.toggled.connect(self._cambio_pantalla)
-            lay.addWidget(c)
+        lay.addWidget(self.modo_xy)
+        fila_fft = QHBoxLayout()
+        fila_fft.addWidget(self.chk_fft)
+        fila_fft.addStretch(1)
+        self.btn_fft = W.boton("Análisis de picos…", self.abrir_analisis_fft)
+        self.btn_fft.setToolTip("Picos, umbrales de detección, promediado, eliminación del piso de "
+                                "ruido, THD y SNR")
+        fila_fft.addWidget(self.btn_fft)
+        lay.addLayout(fila_fft)
+        lay.addWidget(self.chk_cur)
         fila = QHBoxLayout()
         fila.addWidget(W.boton("Exportar CSV", self._exportar_csv))
         fila.addWidget(W.boton("Guardar imagen", self._exportar_png))
@@ -346,6 +715,7 @@ class TabOsciloscopio(QWidget):
         self.vigia.timeout.connect(self._vigilar)
         self.vigia.start(200)
         self._cambio()
+        self._cambio_persistencia()
 
     # ------------------------------------------------------------ config
     def estado_config(self) -> dict:
@@ -353,6 +723,7 @@ class TabOsciloscopio(QWidget):
                 "fuente": self.fuente.currentText(), "flanco": self.flanco.currentText(),
                 "modo": self.modo.currentText(), "nivel": self.nivel.valor(),
                 "suavizado": self.suavizado.currentIndex(), "desplaz": self.desplaz.value(),
+                "persistencia": self.persistencia.currentIndex(), "fft": dict(self.fft_cfg),
                 "ch1": self.canales[1].estado(), "ch2": self.canales[2].estado()}
 
     @property
@@ -493,14 +864,14 @@ class TabOsciloscopio(QWidget):
         self._refrescar()
 
     def _refrescar(self):
-        self._dibujar()
+        self._dibujar(nuevo=True)
         self._fps_n += 1
         ahora = time.monotonic()
         if ahora - self._fps_t > 1.0:
             self.fps = self._fps_n / (ahora - self._fps_t)
             self._fps_n, self._fps_t = 0, ahora
 
-    def _dibujar(self):
+    def _dibujar(self, nuevo: bool = False):
         self._actualizar_ceros()
         u = self.ultimo
         if not u:
@@ -517,6 +888,11 @@ class TabOsciloscopio(QWidget):
             if visible:
                 y = np.clip(u[c][i0:i1] / p.v_div + p.pos.valor(), -DIV_Y, DIV_Y)
                 self.curvas[c].setData(x, y)
+                if nuevo:
+                    self.fosforo.agregar(c, x, y)
+            else:
+                self.fosforo.borrar(c)
+        self.fosforo.img.setVisible(not xy)
         self.curva_xy.setVisible(xy)
         self.marca_disparo.setVisible(not xy)
         self.linea_nivel.setVisible(not xy and self.fuente.currentText() != "Libre")
@@ -535,12 +911,7 @@ class TabOsciloscopio(QWidget):
                 self.celdas[(c, k)].setText(txt)
         # FFT
         if self.chk_fft.isChecked():
-            for c in (1, 2):
-                vis = self.canales[c].visible.isChecked()
-                self.curvas_fft[c].setVisible(vis)
-                if vis and i1 - i0 >= 32:
-                    f, db = M.espectro(u[c][i0:i1], fs)
-                    self.curvas_fft[c].setData(f[1:], db[1:])
+            self._dibujar_fft(u, i0, i1, fs, nuevo)
         estado = {2: "Libre", 1: "Disparado", 0: "Auto (sin disparo)"}.get(u["disparado"], "Desconocido")
         if not self.corriendo:
             estado = "Detenido"
@@ -549,6 +920,8 @@ class TabOsciloscopio(QWidget):
 
     # ------------------------------------------------------------ controles
     def _cambio(self, *_):
+        if hasattr(self, "fosforo"):
+            self.fosforo.borrar()          # las escalas cambiaron: el rastro viejo ya no coincide
         self.marca_disparo.setPos(self._x0())
         fuente = {"CH1": 1, "CH2": 2, "Libre": 0}[self.fuente.currentText()]
         self.linea_nivel.setVisible(fuente != 0)
@@ -583,11 +956,131 @@ class TabOsciloscopio(QWidget):
 
     def _cambio_pantalla(self, *_):
         self.plot_fft.setVisible(self.chk_fft.isChecked())
+        self.fosforo.borrar()
+        if not self.chk_fft.isChecked():
+            self.reiniciar_promedio_fft()
         cur = self.chk_cur.isChecked()
         for c in self.cur_t + self.cur_v:
             c.setVisible(cur)
         self.lbl_cursores.setVisible(cur)
         self._dibujar()
+
+    # ------------------------------------------------------------ persistencia
+    def _cambio_persistencia(self, *_):
+        self.fosforo.set_tiempo(TIEMPOS_PERSIST[self.persistencia.currentIndex()])
+        self.v.guardar_config_pronto()
+
+    # ------------------------------------------------------------ espectro
+    def abrir_analisis_fft(self):
+        if not self.chk_fft.isChecked():
+            self.chk_fft.setChecked(True)
+        if self.dlg_fft is None:
+            self.dlg_fft = DialogoFFT(self)
+        self.dlg_fft.show()
+        self.dlg_fft.raise_()
+        self.dlg_fft.activateWindow()
+        self._dibujar()
+
+    def reiniciar_promedio_fft(self):
+        for c in (1, 2):
+            self.prom_fft[c].reiniciar()
+            self.fft_ult[c] = None
+        if self.ultimo and self.chk_fft.isChecked():
+            self._dibujar()
+
+    def fft_cambiada(self, reiniciar: bool):
+        if reiniciar:
+            for c in (1, 2):
+                self.prom_fft[c].reiniciar()
+                self.fft_ult[c] = None
+        self._aplicar_rango_fft()
+        self._t_dlg_fft = 0.0
+        self.v.guardar_config_pronto()
+        self._dibujar()
+
+    def _aplicar_rango_fft(self):
+        piso = RANGOS_FFT[self.fft_cfg["rango"]][1]
+        self.plot_fft.setYRange(piso, 20, padding=0)
+        self.linea_umbral.setValue(self.fft_cfg["umbral"])
+        self.linea_umbral.setVisible(bool(self.fft_cfg["marcar"]))
+
+    def _umbral_arrastrado(self):
+        v = round(float(self.linea_umbral.value()), 1)
+        self.fft_cfg["umbral"] = v
+        if self.dlg_fft is not None:
+            self.dlg_fft.set_umbral(v)
+        self.v.guardar_config_pronto()
+        self._dibujar()
+
+    def _espectro_canal(self, c: int, v: np.ndarray, fs: float, nuevo: bool) -> dict:
+        """Espectro de un canal con el promediado aplicado (potencia por bin)."""
+        cfg = self.fft_cfg
+        n_prom = PROMEDIOS_FFT[cfg["promedio"]][1]
+        clave = (len(v), round(fs, 3), cfg["ventana"])
+        ult = self.fft_ult[c]
+        if nuevo or ult is None or ult["clave"] != clave:      # si no, se reusa el último espectro
+            f, p, enbw = M.espectro_potencia(v, fs, cfg["ventana"])
+            p = self.prom_fft[c].agregar(clave, p, n_prom) if n_prom > 1 else p
+            ult = {"clave": clave, "f": f, "p": p, "enbw": enbw,
+                   "k": min(self.prom_fft[c].efectivos, n_prom) if n_prom > 1 else 1, "n": n_prom}
+            ult["piso"] = M.piso_ruido(p, ult["k"])
+            self.fft_ult[c] = ult
+        return ult
+
+    def _dibujar_fft(self, u: dict, i0: int, i1: int, fs: float, nuevo: bool):
+        cfg = self.fft_cfg
+        fuerza = RUIDO_FFT[cfg["ruido"]][1]
+        datos = {}
+        for c in (1, 2):
+            vis = self.canales[c].visible.isChecked()
+            self.curvas_fft[c].setVisible(vis)
+            if not vis or i1 - i0 < 32:
+                continue
+            e = self._espectro_canal(c, u[c][i0:i1], fs, nuevo)
+            datos[c] = e
+            p = M.quitar_piso(e["p"], e["piso"], fuerza) if fuerza > 0 else e["p"]
+            self.curvas_fft[c].setData(e["f"][1:], M.a_db(p)[1:])
+        # picos del canal elegido
+        c = cfg["canal"]
+        picos, analisis = [], None
+        if c in datos:
+            e = datos[c]
+            picos = M.buscar_picos(e["f"], e["p"], e["piso"], cfg["umbral"], cfg["sobre_piso"],
+                                   cfg["sep"], cfg["max_picos"], cfg["ignorar_dc"], e["enbw"])
+            analisis = M.analizar_armonicos(e["f"], e["p"], e["piso"], e["enbw"],
+                                            picos[0]["f"] if picos else None)
+            if analisis:
+                f0 = analisis["f0"]
+                for pk in picos:
+                    n = round(pk["f"] / f0) if f0 > 0 else 0
+                    tol = max(3 * (e["f"][1] - e["f"][0]), 0.01 * f0)
+                    pk["armonico"] = n if n >= 1 and abs(pk["f"] - n * f0) <= tol else None
+        self._marcar_picos(picos if cfg["marcar"] else [], COLORES.get(c, W.ALERTA))
+        if self.dlg_fft is not None and self.dlg_fft.isVisible():
+            ahora = time.monotonic()
+            if ahora - self._t_dlg_fft > 0.25:
+                self._t_dlg_fft = ahora
+                e = datos.get(c)
+                self.dlg_fft.mostrar(picos, analisis, (e["k"], e["n"]) if e else (0, 0))
+
+    def _marcar_picos(self, picos: list, color: str):
+        self.marcas_fft.setData([pk["f"] for pk in picos], [pk["db"] for pk in picos])
+        self.marcas_fft.setSymbolBrush(color)
+        self.marcas_fft.setSymbolSize(W.px(11))
+        while len(self.textos_fft) < len(picos):
+            t = pg.TextItem(color=W.TEXTO, anchor=(0.5, 1.15))
+            t._puntos = 8.5
+            t.setFont(W.fuente(puntos=8.5))
+            self.plot_fft.addItem(t)
+            self.textos_fft.append(t)
+        for i, t in enumerate(self.textos_fft):
+            if i < len(picos) and i < 12:
+                pk = picos[i]
+                t.setText(f"{i + 1}: {M.si(pk['f'], 'Hz', 4)}")
+                t.setPos(math.log10(max(pk["f"], 1e-3)), pk["db"])
+                t.setVisible(True)
+            else:
+                t.setVisible(False)
 
     def _actualizar_cursores(self, *_):
         if not self.chk_cur.isChecked():

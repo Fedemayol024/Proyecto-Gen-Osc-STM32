@@ -100,6 +100,96 @@ class TestEspectro(unittest.TestCase):
         self.assertAlmostEqual(float(db[k]), 20 * math.log10(1 / math.sqrt(2)), delta=0.1)
 
 
+class TestAnalisisEspectro(unittest.TestCase):
+    FS, N = 1e6, 8192
+
+    def _senal(self, f0=12345.6, ruido=1e-3, semilla=1):
+        t = np.arange(self.N) / self.FS
+        r2 = math.sqrt(2)
+        rng = np.random.default_rng(semilla)
+        return (1.0 * r2 * np.sin(2 * np.pi * f0 * t) + 0.01 * r2 * np.sin(2 * np.pi * 2 * f0 * t)
+                + 0.003 * r2 * np.sin(2 * np.pi * 3 * f0 * t) + rng.normal(0, ruido, self.N))
+
+    def test_picos_frecuencia_y_nivel_con_todas_las_ventanas(self):
+        v = self._senal()
+        for ventana in ("Hann", "Hamming", "Blackman-Harris", "Flat-top"):
+            f, p, enbw = M.espectro_potencia(v, self.FS, ventana)
+            piso = M.piso_ruido(p)
+            pk = M.buscar_picos(f, p, piso, -70, 10, 0, 3, enbw_bins=enbw)
+            self.assertEqual(len(pk), 3, ventana)
+            self.assertAlmostEqual(pk[0]["f"], 12345.6, delta=2, msg=ventana)
+            self.assertAlmostEqual(pk[0]["db"], 0.0, delta=0.1, msg=ventana)       # 1 V eficaz = 0 dBV
+            self.assertAlmostEqual(pk[1]["db"], -40.0, delta=0.3, msg=ventana)
+            self.assertAlmostEqual(pk[2]["db"], 20 * math.log10(0.003), delta=0.5, msg=ventana)
+
+    def test_umbrales(self):
+        v = self._senal()
+        f, p, enbw = M.espectro_potencia(v, self.FS, "Blackman-Harris")
+        piso = M.piso_ruido(p)
+        self.assertEqual(len(M.buscar_picos(f, p, piso, -45, 10, 0, 10, enbw_bins=enbw)), 2)
+        self.assertEqual(len(M.buscar_picos(f, p, piso, -200, 10, 0, 1, enbw_bins=enbw)), 1)
+        # con un umbral sobre el piso enorme no queda nada salvo lo muy grande
+        self.assertEqual(len(M.buscar_picos(f, p, piso, -200, 80, 0, 10, enbw_bins=enbw)), 1)
+
+    def test_thd_snr(self):
+        v = self._senal()
+        f, p, enbw = M.espectro_potencia(v, self.FS, "Blackman-Harris")
+        a = M.analizar_armonicos(f, p, M.piso_ruido(p), enbw)
+        self.assertAlmostEqual(a["f0"], 12345.6, delta=1)
+        self.assertAlmostEqual(a["thd"], math.hypot(0.01, 0.003), delta=2e-4)
+        self.assertAlmostEqual(a["snr"], 60.0, delta=1.0)            # 1 V contra 1 mV de ruido
+        self.assertAlmostEqual(a["densidad"], 1e-3 / math.sqrt(self.FS / 2), delta=0.1e-6)
+        self.assertTrue(a["resolucion_ok"])
+
+    def test_pocos_periodos_avisa(self):
+        v = self._senal(f0=600.0)
+        f, p, enbw = M.espectro_potencia(v, self.FS, "Blackman-Harris")
+        self.assertFalse(M.analizar_armonicos(f, p, M.piso_ruido(p), enbw)["resolucion_ok"])
+
+    def test_quitar_piso_baja_el_ruido_y_respeta_las_componentes(self):
+        v = self._senal()
+        f, p, enbw = M.espectro_potencia(v, self.FS, "Blackman-Harris")
+        piso = M.piso_ruido(p)
+        q = M.quitar_piso(p, piso, 3.0)
+        k = int(np.argmax(p))
+        self.assertAlmostEqual(10 * math.log10(q[k]), 10 * math.log10(p[k]), delta=0.01)
+        lejos = np.r_[200:1500]
+        self.assertLess(np.median(M.a_db(q)[lejos]), np.median(M.a_db(p)[lejos]) - 30)
+
+    def test_promediado_alisa_el_ruido(self):
+        prom = M.PromedioEspectro()
+        rng = np.random.default_rng(3)
+        desvios = []
+        for i in range(32):
+            f, p, _ = M.espectro_potencia(rng.normal(0, 1e-3, 4096), 1e6)
+            q = prom.agregar(("x",), p, 32)
+            if i in (0, 31):
+                desvios.append(float(np.std(M.a_db(q)[50:-50])))
+        self.assertLess(desvios[1], desvios[0] / 3)
+        q = prom.agregar(("otra",), p, 32)            # cambió la clave: arranca de nuevo
+        self.assertEqual(prom.cuenta, 1)
+
+
+class TestFosforo(unittest.TestCase):
+    def test_trazo_continuo_sin_huecos(self):
+        x = np.linspace(0, 10, 300)                # menos muestras que columnas
+        img = M.rasterizar_trazo(x, np.zeros_like(x), 1000, 640, 10, -4, 4)
+        self.assertTrue(img[:, 320].all())
+        self.assertEqual(int(img.sum()), 1000)
+
+    def test_flanco_vertical_marca_toda_la_columna(self):
+        x = np.array([4.999, 5.0005, 10.0])
+        y = np.array([-3.0, 3.0, 3.0])
+        img = M.rasterizar_trazo(x, y, 1000, 640, 10, -4, 4)
+        col = img[499]
+        self.assertTrue(col[int((-3 + 4) / 8 * 640):int((3 + 4) / 8 * 640)].all())
+
+    def test_fuera_de_pantalla_no_marca(self):
+        x = np.linspace(0, 10, 4000)
+        img = M.rasterizar_trazo(x, np.full_like(x, 6.0), 1000, 640, 10, -4, 4)
+        self.assertFalse(img.any())
+
+
 class TestSuavizar(unittest.TestCase):
     def test_conserva_la_longitud(self):
         v = np.arange(100, dtype=float)
@@ -199,9 +289,14 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(M.ruta_config("F429").name, "config_F429.json")
 
     def test_preferencias_de_placa(self):
-        self.assertEqual(M.cargar_preferencias(), {"placa": "F767", "preguntar": True})
+        self.assertEqual(M.cargar_preferencias(), {"placa": "F767", "preguntar": True, "zoom": 1.0})
         M.guardar_preferencias({"placa": "F429", "preguntar": False})
-        self.assertEqual(M.cargar_preferencias(), {"placa": "F429", "preguntar": False})
+        self.assertEqual(M.cargar_preferencias(), {"placa": "F429", "preguntar": False, "zoom": 1.0})
+        M.guardar_zoom(1.4)
+        self.assertEqual(M.zoom_guardado(), 1.4)
+        self.assertEqual(M.cargar_preferencias()["placa"], "F429")         # no pisa lo demás
+        M.ruta_preferencias().write_text('{"zoom": 50}', encoding="utf-8")
+        self.assertEqual(M.zoom_guardado(), 1.0)                           # valor absurdo
         M.ruta_preferencias().write_text('{"placa": "F999"}', encoding="utf-8")
         self.assertEqual(M.cargar_preferencias()["placa"], "F767")   # placa desconocida
 
