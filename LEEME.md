@@ -135,6 +135,7 @@ Para crear el `.exe`, hacé doble clic en `app/build_exe.bat`. Necesita Python 3
 6. **Calibración** (una vez):
    - **Salidas:** con multímetro, dos puntos por canal.
    - **Entradas:** automática, conectando OUT1→IN1 y OUT2→IN2. También hay un "cero" con las entradas a GND.
+7. **Placa:** capacidades y límites de la placa elegida (con los valores medidos en vivo al conectar), un dibujo de la placa con la ubicación de cada pin que usa el instrumento y diagramas de conexión para los usos típicos (prueba rápida, Bode, señal externa, frecuencímetro y PWM).
 
 Las calibraciones y los ajustes se guardan en `%APPDATA%\InstrumentoF767\`: `config.json` para la F767ZI y `config_F429.json` para la F429ZI. La placa elegida se guarda en `preferencias.json`.
 

@@ -24,6 +24,7 @@ from tab_calibracion import TabCalibracion
 from tab_generador import TabGenerador
 from tab_herramientas import TabHerramientas
 from tab_osciloscopio import TabOsciloscopio
+from tab_placa import TabPlaca
 
 VERSION = "1.0"
 
@@ -144,11 +145,13 @@ class Ventana(QMainWindow):
         self.tab_bode = TabBode(self)
         self.tab_herr = TabHerramientas(self)
         self.tab_cal = TabCalibracion(self)
+        self.tab_placa = TabPlaca(self)
         self.tabs.addTab(self.tab_osc, "Osciloscopio")
         self.tabs.addTab(self.tab_gen, "Generador")
         self.tabs.addTab(self.tab_bode, "Bode")
         self.tabs.addTab(self.tab_herr, "Frecuencímetro y PWM")
         self.tabs.addTab(self.tab_cal, "Calibración")
+        self.tabs.addTab(self.tab_placa, "Placa")
 
         self.setStatusBar(QStatusBar())
         self.estado(f"Versión {VERSION}. Conectá el USB USER (CN13) del Nucleo y tocá Conectar.")
@@ -263,6 +266,7 @@ class Ventana(QMainWindow):
         self.estado("Instrumento conectado.", W.OK)
         self.tab_gen.reenviar_todo()
         self.tab_osc.al_conectar()
+        self.tab_placa.al_conectar()
         self.guardar_config_pronto()
 
     def _al_desconectar(self, motivo: str, color: str):
@@ -272,6 +276,7 @@ class Ventana(QMainWindow):
         self.lbl_con.setStyleSheet(f"color: {W.TENUE};")
         self.tab_osc.al_desconectar()
         self.tab_herr.al_desconectar()
+        self.tab_placa.al_desconectar()
         if self.tab_bode.activo:
             self.tab_bode.activo = False
             self.tab_bode.btn.setText("Iniciar barrido")
