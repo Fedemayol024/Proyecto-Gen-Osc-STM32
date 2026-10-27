@@ -164,7 +164,9 @@ class TabOsciloscopio(QWidget):
         self.ets_afinada = False    # f0 ya viene de afinar un cuadro (búsqueda más angosta)
         self.ets_fallos = 0
         self.ets_arr = None
-        self.ets_tclk = M.TCLK_TIMER
+        # reloj de TIM8 (fija el muestreo): 216 MHz en la F767, 168 MHz en la F429. Igual se corrige
+        # con la frecuencia de muestreo real que informa la placa después de la primera captura.
+        self.ets_tclk = 168e6 if getattr(ventana, "placa", "F767") == "F429" else M.TCLK_TIMER
 
         raiz = QHBoxLayout(self)
         raiz.setContentsMargins(8, 8, 8, 8)
@@ -544,6 +546,8 @@ class TabOsciloscopio(QWidget):
         self.ets = {"f": res["f"], "perfiles": perfiles}
         if avisos:
             self.v.estado("Tiempo equivalente: " + "; ".join(avisos) + ".", W.ALERTA)
+        else:
+            self.v.estado(f"Tiempo equivalente: señal de {M.si(res['f'], 'Hz', 7)} reconstruida.", W.OK)
         return self._cuadro_eq()
 
     def _cuadro_eq(self) -> bool:
