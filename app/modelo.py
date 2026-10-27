@@ -124,9 +124,8 @@ def _vin_rango(ganancia):
 MODOS_ENTRADA = {
     "ALTO": ModoEntrada("ALTO", "Placa ±10 V", 10.0, _recta_lineal(_vin_rango(1.0))),
     "BAJO": ModoEntrada("BAJO", "Placa ±1 V (×10)", 1.0, _recta_lineal(_vin_rango(G_ALTA))),
+    "DIRECTO": ModoEntrada("DIRECTO", "Pin directo (0–3,3 V)", 3.3, _recta_lineal(_vadc)),
 }
-# Las entradas del osciloscopio se usan SOLO a través de la etapa de entrada (Hoja 2):
-# no hay modo «pin directo», para que nunca llegue al ADC una tensión fuera de 0–3,3 V.
 
 # ---------------------------------------------------------------------------
 # Formas de onda

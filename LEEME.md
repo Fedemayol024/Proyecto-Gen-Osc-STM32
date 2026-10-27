@@ -10,7 +10,7 @@ Una sola app de PC y una placa **NUCLEO-F767ZI** o **NUCLEO-F429ZI** forman un p
 | **Frecuencímetro** | Conteo de flancos (hasta decenas de MHz) o método recíproco (frecuencias bajas con muchas cifras). Elige el método solo. | PA0 (D32) |
 | **PWM complementario** | Hasta decenas de MHz, ciclo útil y **tiempo muerto** ajustables (ns), para puentes H e inversores. | PE9 (D6), PE8 (D42) |
 
-> **Las entradas (osciloscopio y frecuencímetro) se usan siempre a través del hardware adicional** (carpeta `hardware`): etapa de entrada de ±10 V / ±1 V con 1 MΩ y protección (Hoja 2) y entrada protegida para el frecuencímetro (Hoja 3). Nunca se conecta una señal directo a A0, A1 o D32: esos pines solo aguantan 0 a 3,3 V y una tensión negativa puede dañar el micro. Por eso la app no tiene modo «pin directo» en las entradas. Las salidas del generador sí pueden usarse directo (0,2 a 3,1 V, no hay riesgo) o con la etapa de salida de ±5 V (Hoja 1).
+> Todo lo de arriba anda con la placa sola usando los pines directos: entradas de 0 a 3,3 V y salidas de 0,2 a 3,1 V. El hardware adicional (carpeta `hardware`) agrega salidas de ±5 V, entradas de ±10 V / ±1 V con 1 MΩ y protección, y una entrada protegida para el frecuencímetro.
 
 ## Contenido
 
@@ -128,8 +128,8 @@ Para crear el `.exe`, hacé doble clic en `app/build_exe.bat`. Necesita Python 3
 3. **Osciloscopio:**
    - **RUN/STOP**, **Único** y **Autoset**.
    - Tiempo/div, V/div y posición. La línea naranja de disparo se puede arrastrar.
-   - En **Entrada** elegí "Placa ±10 V", "Placa ±1 V (×10)" (tiene que coincidir con la llave S2/S4 de la placa).
-   - **Adquisición → Tiempo equivalente:** para señales **repetitivas y estables** de más de ~200 kHz, que en tiempo real no se reconocen. Conectá la misma señal a IN1 de la etapa de entrada y a la entrada FREC de la Hoja 3 (el frecuencímetro mide la frecuencia); la app captura 8192 muestras, las ordena según la fase de la señal y dibuja un período con 256 puntos. Si la señal no se repite, avisa y conviene volver a *Tiempo real*. No sirve para eventos únicos ni para señales que cambian de frecuencia. El ancho de banda real lo limita el frontal analógico (con el MCP6024, ~0,7 MHz a 3 Vpp y varios MHz con señales chicas). Para probarlo: PWM de la pestaña Herramientas (D6) a IN1 y a FREC, canal 1 en "Placa ±10 V". El diagrama está en la pestaña Placa → Conexiones.
+   - En **Entrada** elegí "Placa ±10 V", "Placa ±1 V (×10)" (tiene que coincidir con la llave S2/S4 de la placa) o "Pin directo".
+   - **Adquisición → Tiempo equivalente:** para señales **repetitivas y estables** de más de ~200 kHz, que en tiempo real no se reconocen. Conectá la misma señal al canal y a **PA0** (el frecuencímetro mide la frecuencia); la app captura 8192 muestras, las ordena según la fase de la señal y dibuja un período con 256 puntos. Si la señal no se repite, avisa y conviene volver a *Tiempo real*. No sirve para eventos únicos ni para señales que cambian de frecuencia. El ancho de banda real lo limita el frontal analógico (con el MCP6024, ~0,7 MHz a 3 Vpp y varios MHz con señales chicas). Para probarlo sin hardware extra: PWM de la pestaña Herramientas (PE9) a PA0 y al canal 1 en "Pin directo".
 4. **Bode:** conectá Generador CH1 → entrada del circuito y IN1, y la salida del circuito → IN2. Elegí el rango y tocá *Iniciar barrido*.
 5. **Frecuencímetro y PWM:** lectura grande con el método usado. El PWM muestra los valores reales obtenidos.
 6. **Calibración** (una vez):
@@ -214,7 +214,7 @@ Son líneas de texto terminadas en `\n`.
 | `PWM frec ciclo tm_ns hab` | `OK PWM frec_real ciclo_real tm_real` |
 
 ## 5. Límites y consejos
-- **Nunca conectes una señal directo a A0, A1 o D32:** aceptan **solo 0 a 3,3 V** y una tensión negativa puede dañar el micro. Todo entra por la etapa de entrada (Hoja 2) o la entrada FREC (Hoja 3).
+- **Rangos de los pines directos:** las entradas del ADC aceptan **solo 0 a 3,3 V**. Para cualquier otra señal usá la etapa de entrada.
 - **Ancho de banda:** el osciloscopio llega a ~1,6 MS/s, así que hasta ~150–200 kHz se ven bien. El generador, hasta ~100 kHz.
 - **Bode:** queda bien de unos pocos Hz hasta ~100 kHz. Las frecuencias bajas tardan más, porque espera el régimen permanente y captura al menos 8 períodos.
 - **Señales lentas:** con bases de tiempo de 50 ms/div o más, en modo Auto se captura sin buscar disparo para no esperar de más.

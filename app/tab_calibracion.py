@@ -136,8 +136,12 @@ class TabCalibracion(QWidget):
     def _auto_poner(self):
         paso = self.auto["paso"]
         for c in (1, 2):
-            v = self._niveles(c)[paso]
-            r = self.v.config.recta_salida(c, "PLACA")
+            niveles = self._niveles(c)
+            if self.v.tab_osc.canales[c].clave_entrada == "DIRECTO":
+                niveles = (0.5, 2.8)
+            v = niveles[paso]
+            modo = "PLACA" if self.v.tab_osc.canales[c].clave_entrada != "DIRECTO" else "DIRECTO"
+            r = self.v.config.recta_salida(c, modo)
             cod = int(np.clip(np.rint(r.codigo(v)), 0, 4095))
             self.auto["volts"][c].append(float(r.volt(cod)))
             self.v.disp.enviar_tabla(c, np.full(M.TABLA_N, cod, dtype=np.uint16))

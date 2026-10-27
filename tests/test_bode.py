@@ -94,7 +94,7 @@ class TestPuntoDelBarrido(unittest.TestCase):
         self.v.disp.enviar = lambda texto: self.enviados.append(texto) or True
         self.bode = self.v.tab_bode
         for c in (1, 2):
-            self.v.tab_osc.canales[c].entrada.setCurrentText(M.MODOS_ENTRADA["ALTO"].nombre)
+            self.v.tab_osc.canales[c].entrada.setCurrentText(M.MODOS_ENTRADA["DIRECTO"].nombre)
 
     def tearDown(self):
         self.v.close()
