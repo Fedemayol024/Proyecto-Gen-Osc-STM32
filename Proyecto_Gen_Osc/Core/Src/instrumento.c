@@ -140,7 +140,6 @@ static void tx_atender(void)
     case TRAMA_ESPERA_FIN:
       trama = TRAMA_NO;          /* el envío anterior terminó: buffer libre */
       osc_liberar();
-      //GPIOB->ODR ^= (1u << 0);   /* LD1 (verde): parpadea con cada captura */
       break;
     default:
       break;
@@ -392,10 +391,7 @@ static void procesar_rx(void)
     if (ch == '\r') continue;
     if (ch == '\n') {
       linea[linea_len] = '\0';
-      if (linea_len > 0u) {
-        //GPIOB->ODR ^= (1u << 14);      /* LD3 (rojo): cambia con cada comando recibido */
-        procesar_linea(linea);
-      }
+      if (linea_len > 0u) procesar_linea(linea);
       linea_len = 0;
       continue;
     }
@@ -412,12 +408,11 @@ static void procesar_rx(void)
 /* ------------------------------------------------------------------------ */
 void instrumento_iniciar(void)
 {
-  /* LEDs de diagnóstico: LD1 (PB0) verde = capturas, LD2 (PB7) azul = el
-   * programa está corriendo (parpadea), LD3 (PB14) rojo = comandos recibidos */
+  /* LD2 (PB7, azul): parpadea mientras el programa está corriendo.
+   * LD1 (verde) y LD3 (rojo) no se usan: quedan apagados. */
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
   (void)RCC->AHB1ENR;
-  GPIOB->MODER = (GPIOB->MODER & ~((3u << 0) | (3u << 14) | (3u << 28)))
-               | (1u << 0) | (1u << 14) | (1u << 28);
+  GPIOB->MODER = (GPIOB->MODER & ~(3u << 14)) | (1u << 14);
   GPIOB->ODR &= ~((1u << 0) | (1u << 7) | (1u << 14));
 
   gen_iniciar();
