@@ -160,7 +160,7 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         with mock.patch.object(type(self.v.disp), "esta_conectado", new_callable=mock.PropertyMock,
                                return_value=True):
             for c in (1, 2):
-                self.osc.canales[c].entrada.setCurrentText(M.MODOS_ENTRADA["DIRECTO"].nombre)
+                self.osc.canales[c].entrada.setCurrentText(M.MODOS_ENTRADA["ALTO"].nombre)
             self.osc.adquisicion.setCurrentIndex(1)
             self.osc.tdiv.setCurrentIndex(TO.TDIVS.index(2e-6))
             self.osc._alternar_run()
@@ -180,7 +180,8 @@ class TestPestanaOsciloscopio(unittest.TestCase):
             i0, i1 = self.osc._indices_visibles(u)
             m = M.medir(u[1][i0:i1], u["fs"])
             self.assertAlmostEqual(m["frec"], f_real, delta=f_real * 2e-3)
-            self.assertTrue(0.8 < m["vpp"] < 1.1)
+            # En el ADC la señal mide ~1 Vpp; con la etapa ±10 V eso es ~1/K_IN de entrada
+            self.assertTrue(0.8 / M.K_IN < m["vpp"] < 1.1 / M.K_IN)
             self.assertTrue(enviados[-1].startswith("CAP"))                 # RUN: sigue capturando
 
             previo = self.osc.ultimo                                        # 4) señal inestable

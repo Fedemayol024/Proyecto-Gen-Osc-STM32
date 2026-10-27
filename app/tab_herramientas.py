@@ -17,7 +17,7 @@ class TabHerramientas(QWidget):
         raiz.setContentsMargins(8, 8, 8, 8)
 
         # ---------------------------------------------- frecuencímetro
-        g, lay = W.grupo("Frecuencímetro  ·  entrada D32 (PA0), señal lógica 0–3,3 V")
+        g, lay = W.grupo("Frecuencímetro  ·  D32 (PA0) por la entrada protegida (Hoja 3)")
         self.lbl_f = QLabel("— Hz")
         self.lbl_f.setObjectName("grande")
         self.lbl_f.setAlignment(Qt.AlignCenter)
@@ -38,8 +38,8 @@ class TabHerramientas(QWidget):
         lay.addWidget(W.etiqueta_tenue(
             "Frecuencias altas: cuenta flancos durante la compuerta (hasta decenas de MHz).\n"
             "Frecuencias bajas: mide el tiempo entre flancos con resolución de ~9 ns, así que "
-            "da muchas cifras aun con compuertas cortas. Para señales analógicas o de más de 3,3 V "
-            "usá la etapa de entrada de la placa."))
+            "da muchas cifras aun con compuertas cortas. La señal entra siempre por la entrada "
+            "protegida FREC (Hoja 3), nunca directo a D32."))
         lay.addStretch(1)
         self.compuerta.currentIndexChanged.connect(self._reiniciar_f)
         raiz.addWidget(g, 1)
