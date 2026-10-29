@@ -12,6 +12,8 @@ Una sola app de PC y una placa **NUCLEO-F767ZI** o **NUCLEO-F429ZI** forman un p
 
 > Todo lo de arriba anda con la placa sola usando los pines directos: entradas de 0 a 3,3 V y salidas de 0,2 a 3,1 V. El hardware adicional (carpeta `hardware`) agrega salidas de ±5 V, entradas de ±10 V / ±1 V con 1 MΩ y protección, y una entrada protegida para el frecuencímetro.
 
+> Historial de cambios por versión: [CHANGELOG.md](CHANGELOG.md).
+
 ## Contenido
 
 ```
