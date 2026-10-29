@@ -30,7 +30,7 @@ from tab_placa import TabPlaca
 # Versión de la app (MAYOR.MENOR.PARCHE). Mientras el MAYOR sea 0 es una beta: todavía
 # se agregan funciones. El firmware usa el mismo número (INSTR_VERSION en instrumento.h);
 # si cambia el MAYOR.MENOR, la app pide cargar el firmware nuevo.
-VERSION = "0.8.18"
+VERSION = "0.8.19"
 ETAPA = "beta"
 VERSION_TEXTO = f"{VERSION} {ETAPA}".strip()
 

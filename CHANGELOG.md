@@ -19,6 +19,10 @@ La app (`VERSION` en `app/main.py`) y el firmware (`INSTR_VERSION` en `instrumen
 
 _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan a una sección con número y fecha._
 
+---
+
+## [0.8.19 beta] · 2026-10-29 · La F429ZI vuelve a conectar
+
 ### Nuevo
 - Este archivo de notas de versión.
 
