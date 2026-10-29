@@ -139,8 +139,10 @@ class Dispositivo(QObject):
             return
         if not version:
             ser.close()
-            self.error.emit(f"La placa en {puerto} no respondió. ¿Está cargado el firmware del "
-                            "instrumento y conectado el USB USER (CN13)?")
+            self.error.emit(f"La placa en {puerto} no respondió. Revisá: 1) el cable en el USB USER "
+                            "(CN13); 2) que el LED azul LD2 parpadee (si no, falta instrumento_iniciar() "
+                            "e instrumento_lazo() en main.c); 3) que CDC_Receive_FS de usbd_cdc_if.c "
+                            "llame a instrumento_usb_rx(Buf, *Len).")
             return
         self._ser, self._activo = ser, True
         self.puerto, self.version, self.info, self.placa = puerto, version, info, placa

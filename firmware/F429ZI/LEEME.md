@@ -63,6 +63,18 @@ y completar los dos casos **que ya existen** en `CDC_Control_FS`. No hay que agr
 ### Cargar y conectar
 Cargá con *Run* por el USB del ST-LINK. Después conectá un **segundo cable** al USB **USER** (CN13). En la app elegí **NUCLEO-F429ZI** al abrir.
 
+## Si la app dice «La placa no respondió»
+
+El puerto COM aparece en Windows, pero la placa no contesta. Casi siempre falta alguno de los agregados de arriba: los archivos del instrumento están en el proyecto, pero nadie los llama, y el compilador los descarta sin avisar.
+
+| Síntoma | Causa | Arreglo |
+|---|---|---|
+| El LED azul LD2 **no** parpadea | Falta `instrumento_iniciar()` / `instrumento_lazo()` en `main.c` | Agregarlos (y el `#include "instrumento.h"`) en los bloques USER CODE |
+| LD2 parpadea, pero no hay respuesta | `CDC_Receive_FS` todavía tiene el código de CubeMX (`USBD_CDC_SetRxBuffer` + `USBD_CDC_ReceivePacket`) | Reemplazarlo por `instrumento_usb_rx(Buf, *Len); return (USBD_OK);` |
+| No aparece ningún puerto COM | Cable en el ST-LINK en lugar del USB USER (CN13), o HCLK distinto de 168 MHz | Usar CN13; poner HCLK = 168 en *Clock Configuration* |
+
+Para ver qué contesta la placa: `python diag_puerto.py COMx` desde la carpeta `app`.
+
 ## Diferencias con la F767ZI
 
 | | F767ZI | F429ZI |

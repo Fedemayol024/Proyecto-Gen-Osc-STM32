@@ -22,6 +22,16 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
 ### Nuevo
 - Este archivo de notas de versión.
 
+### Corregido
+- **NUCLEO-F429ZI no se conectaba con la app** (proyecto de CubeIDE de Jorge). Los archivos del instrumento estaban copiados, pero el proyecto nunca los llamaba: faltaban `instrumento_iniciar()` e `instrumento_lazo()` en `main.c`, y `CDC_Receive_FS` (`usbd_cdc_if.c`) seguía con el código de CubeMX en lugar de `instrumento_usb_rx()`. El compilador descartaba todo el instrumento, así que la placa aparecía como puerto COM pero no contestaba. Se agregaron esas llamadas y el `lineCoding` recomendado, y se compiló sin warnings.
+
+### Mejorado
+- Cuando la placa no responde, la app dice qué revisar: el cable en CN13, el LED azul LD2 y las dos llamadas que faltan en `main.c` y `usbd_cdc_if.c`.
+- `firmware/F429ZI/LEEME.md`: nueva sección «Si la app dice “La placa no respondió”» con síntomas, causas y arreglos.
+
+### Pendiente de probar
+- Recompilar y cargar en la F429ZI de Jorge y conectar con la app.
+
 ---
 
 ## [0.8.18 beta] · 2026-10-27
