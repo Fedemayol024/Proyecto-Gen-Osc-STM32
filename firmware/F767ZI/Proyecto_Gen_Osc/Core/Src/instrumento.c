@@ -22,6 +22,9 @@
  *   FCNT ms continuo            -> FREQ f metodo flancos ms  (ms = 0 detiene)
  *   PWM frec ciclo tm_ns hab    -> OK PWM frec_real ciclo_real tm_real
  *   STAT?                       -> STAT subejec=.. osc=.. osc_err=.. tx_perd=..
+ *   DDS frec forma hab          -> OK DDS frec_real    (módulo AD9833; forma 0 seno,
+ *                                                       1 triangular, 2 cuadrada)
+ *   DDSA paso                   -> OK DDSA paso        (amplitud, 0..255)
  */
 #include "instrumento.h"
 #include "hw_util.h"
@@ -29,11 +32,13 @@
 #include "osciloscopio.h"
 #include "frecuencimetro.h"
 #include "pwm.h"
+#include "ad9833.h"
 
 #include "usbd_def.h"
 #include "usbd_cdc.h"
 #include "usbd_cdc_if.h"
 
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -209,9 +214,9 @@ static void cmd_info(void)
   char a[24], b[24];
   fmt_double(a, sizeof a, gen_fs(), 3);
   fmt_double(b, sizeof b, osc_fs_max(), 3);
-  responder("INFO gen_fs=%s osc_fsmax=%s tabla=%u ventana=%u cpu=%lu wdg_ms=%lu reinicio=%s", a, b,
-            (unsigned)GEN_TABLA_N, (unsigned)OSC_MAX_VENTANA, (unsigned long)SystemCoreClock,
-            (unsigned long)WDG_MS, causa_reinicio());
+  responder("INFO gen_fs=%s osc_fsmax=%s tabla=%u ventana=%u cpu=%lu wdg_ms=%lu reinicio=%s dds_mclk=%lu",
+            a, b, (unsigned)GEN_TABLA_N, (unsigned)OSC_MAX_VENTANA, (unsigned long)SystemCoreClock,
+            (unsigned long)WDG_MS, causa_reinicio(), (unsigned long)DDS_MCLK_HZ);
 }
 
 static void procesar_linea(char *l)
@@ -343,6 +348,28 @@ static void procesar_linea(char *l)
     return;
   }
 
+  if (!strcmp(c0, "DDS")) {
+    if (nt < 4 || !num(tok[1], &v[0]) || !num(tok[2], &v[1]) || !num(tok[3], &v[2]) ||
+        v[1] < 0.0 || v[1] > 2.0) {
+      responder("ERR DDS: DDS frec forma(0 seno,1 triangular,2 cuadrada) hab");
+      return;
+    }
+    double fr = dds_configurar(v[0], (dds_forma_t)(int)v[1], v[2] != 0.0);
+    fmt_double(a, sizeof a, fr, 4);
+    responder("OK DDS %s", a);
+    return;
+  }
+
+  if (!strcmp(c0, "DDSA")) {
+    if (nt < 2 || !num(tok[1], &v[0]) || v[0] < 0.0 || v[0] > 255.0) {
+      responder("ERR DDSA: DDSA paso(0..255)");
+      return;
+    }
+    dds_amplitud((uint8_t)lround(v[0]));
+    responder("OK DDSA %u", (unsigned)lround(v[0]));
+    return;
+  }
+
   if (!strcmp(c0, "STAT?")) {
     responder("STAT subejec=%lu osc=%d osc_err=%lu tx_perd=%lu", (unsigned long)gen_subejecuciones(),
               osc_ocupado(), (unsigned long)osc_errores(), (unsigned long)tx_perdidas_total);
@@ -421,6 +448,7 @@ void instrumento_iniciar(void)
   osc_iniciar();
   fcnt_iniciar();
   pwm_iniciar();
+  dds_iniciar();
 
   /* Último: si algo de lo anterior se colgara, no hay watchdog todavía y se ve
    * en el depurador; desde acá, un cuelgue reinicia la placa sola. */

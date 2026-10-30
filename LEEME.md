@@ -60,7 +60,7 @@ El código del instrumento configura sus periféricos (DAC, ADC, DMA y timers) d
 > La D-Cache del Cortex-M7 (*System Core → CORTEX_M7*) puede estar activada o no: el código hace el mantenimiento de caché solo.
 
 ### 1.3 Agregar los archivos
-Copiá los `.h` de `Core/Inc` y los `.c` de `Core/Src` de la carpeta de tu placa (en la F767ZI están dentro de `Proyecto_Gen_Osc`) a las carpetas **Core/Inc** y **Core/Src** del proyecto. Son 7 `.h` (incluido `placa.h`) y 6 `.c`. Podés arrastrarlos al *Project Explorer* y elegir *Copy files*.
+Copiá los `.h` de `Core/Inc` y los `.c` de `Core/Src` de la carpeta de tu placa (en la F767ZI están dentro de `Proyecto_Gen_Osc`) a las carpetas **Core/Inc** y **Core/Src** del proyecto. Son 8 `.h` (incluido `placa.h`) y 7 `.c`. Podés arrastrarlos al *Project Explorer* y elegir *Copy files*.
 
 ### 1.4 Tres agregados en `Core/Src/main.c`
 ```c
@@ -167,6 +167,20 @@ Las calibraciones y los ajustes se guardan en `%APPDATA%\InstrumentoF767\`: `con
 - **PWM:** salidas con 100 Ω en serie.
 - **Alimentación ±12 V:** módulo DC-DC A0512S-1W desde el 5 V del Nucleo. También sirve una fuente partida, o dos baterías de 9 V.
 
+### Módulo AD9833 (generador DDS externo, opcional)
+Módulo comercial con **AD9833** (DDS, oscilador de 25 MHz), **MCP41010** (potenciómetro digital de 10 kΩ que fija la amplitud) y **AD8051** (amplificador de salida). Seno, triangular o cuadrada de 0,1 Hz a 12,5 MHz, con un paso de 0,093 Hz. Se maneja desde la pestaña **Generador** (panel «Módulo AD9833»).
+
+| Nucleo (CN8) | Módulo |
+|---|---|
+| 3V3 | VCC (**alimentar con 3,3 V**: a 5 V el MCP41010 no reconoce bien los 3,3 V de la placa) |
+| GND | GND |
+| PC10 (D45) | CLK |
+| PC12 (D47) | DAT |
+| PD2 (D48) | FSY (AD9833) |
+| PG2 (D49) | CS (MCP41010) |
+
+Salidas del módulo: **VOUT** (directa del AD9833, ~0,6 Vpp) y **PGA** (amplificada, con la amplitud del potenciómetro). Diagrama: `hardware/ad9833_conexion.png`.
+
 ### Lista de materiales
 
 | Ref. | Valor | Cant. | Notas |
@@ -220,6 +234,8 @@ Son líneas de texto terminadas en `\n`.
 | `CAPX` | `OK CAPX` |
 | `FCNT ms continuo` | `FREQ f metodo flancos ms` |
 | `PWM frec ciclo tm_ns hab` | `OK PWM frec_real ciclo_real tm_real` |
+| `DDS frec forma hab` | `OK DDS frec_real` (módulo AD9833; forma 0 seno, 1 triangular, 2 cuadrada) |
+| `DDSA paso` | `OK DDSA paso` (amplitud del AD9833, 0..255) |
 
 ## 5. Límites y consejos
 - **Si la placa se cuelga o se reinicia:** el watchdog la reinicia sola en 2 s. La app detecta que se cortó el USB, la busca durante 20 s, se reconecta, vuelve a mandar la configuración del generador y avisa en la barra de estado si el reinicio fue por el watchdog. En la pestaña **Placa** se ve la causa del último reinicio. Durante la reconexión el botón dice *Cancelar*.

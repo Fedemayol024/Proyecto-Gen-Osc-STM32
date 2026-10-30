@@ -48,6 +48,7 @@ class Canal:
 
 gen = {1: Canal(), 2: Canal()}
 pwm = {"f": 0.0, "hab": False}
+dds = {"f": 0.0, "forma": 0, "hab": False, "amp": 0}
 fcnt = {"ms": 0, "cont": False, "t": 0.0}
 
 
@@ -169,7 +170,7 @@ while True:
             if cmd == "ID?":
                 resp(f"INSTR-{PLACA} v0.8.19")
             elif cmd == "INFO?":
-                resp(f"INFO gen_fs={FS_GEN:.3f} osc_fsmax={FSMAX:.3f} tabla=4096 ventana=8192 cpu={CPU} wdg_ms=2000 reinicio=energia")
+                resp(f"INFO gen_fs={FS_GEN:.3f} osc_fsmax={FSMAX:.3f} tabla=4096 ventana=8192 cpu={CPU} wdg_ms=2000 reinicio=energia dds_mclk=25000000")
             elif cmd == "GTBL":
                 bin_pend = (int(p[1]), int(p[2]), int(p[3]))
             elif cmd == "GSET":
@@ -199,6 +200,19 @@ while True:
                 pwm.update(f=TCLK2 / (psc * per), hab=hab)
                 ccr = round(per * ciclo / 100)
                 resp(f"OK PWM {pwm['f']:.4f} {100 * ccr / per:.3f} {round(tm / (1e9 / TCLK2)) * 1e9 / TCLK2:.2f}")
+            elif cmd == "DDS":                 # módulo AD9833
+                f, forma, hab = float(p[1]), int(float(p[2])), p[3] != "0"
+                if not 0 <= forma <= 2:
+                    raise ValueError("forma")
+                reg = min(max(round(min(max(f, 0), 12.5e6) * 2**28 / 25e6), 0), 2**28 - 1)
+                dds.update(f=reg * 25e6 / 2**28, forma=forma, hab=hab)
+                resp(f"OK DDS {dds['f']:.4f}")
+            elif cmd == "DDSA":
+                n = round(float(p[1]))
+                if not 0 <= n <= 255:
+                    raise ValueError("paso")
+                dds["amp"] = n
+                resp(f"OK DDSA {n}")
             elif cmd == "STAT?":
                 resp("STAT subejec=0 osc=0")
             else:

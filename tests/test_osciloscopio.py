@@ -249,6 +249,33 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         self.assertEqual(scroll.width(), ancho)
         self.assertEqual(M.zoom_guardado(), 1.0)
 
+    # --------------------------------------------------------------- AD9833
+    def test_ad9833_envia_comandos_solo_con_firmware_que_lo_soporta(self):
+        enviados = []
+        self.v.disp.enviar = lambda t: enviados.append(t) or True
+        self.v.disp.enviar_tabla = lambda *a: True
+        gen = self.v.tab_gen
+        with mock.patch.object(type(self.v.disp), "esta_conectado", new_callable=mock.PropertyMock,
+                               return_value=True):
+            self.v.disp.info = {}                                   # firmware viejo
+            gen.reenviar_todo()
+            self.assertFalse(any(e.startswith("DDS") for e in enviados))
+            self.assertIn("firmware", gen.dds.lbl_info.text())
+            self.v.disp.info = {"dds_mclk": 25e6}                   # firmware nuevo
+            gen.reenviar_todo()
+            self.assertIn("DDS 100000.0000 0 0", enviados)
+            self.assertIn("DDSA 128", enviados)
+            enviados.clear()
+            gen.dds.frec.set_valor(1e6)
+            gen.dds.forma.setCurrentText("Cuadrada")
+            gen.dds.hab.setChecked(True)
+            gen.dds._cambio()
+            gen._enviar()
+            self.assertEqual(enviados, ["DDS 1000000.0000 2 1"])     # la amplitud no cambió
+            gen.al_linea("OK DDS 999999.9776")
+            self.assertIn("confirmada", gen.dds.lbl_info.text())
+        self.assertEqual(gen.estado_config()["dds"]["forma"], "Cuadrada")
+
     # --------------------------------------------------------------- reconexión / watchdog
     def test_reconexion_automatica_tras_un_reinicio(self):
         abiertos = []

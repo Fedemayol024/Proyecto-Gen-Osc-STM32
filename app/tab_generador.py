@@ -182,6 +182,78 @@ class PanelGenerador(QWidget):
         return cmds
 
 
+class PanelDDS(QWidget):
+    """Módulo AD9833 externo: seno, triangular o cuadrada de 0,1 Hz a 12,5 MHz."""
+
+    def __init__(self, tab, datos: dict | None):
+        super().__init__()
+        self.tab = tab
+        self.c = M.ConfigDDS.desde_dict(datos)
+        self.frec_real = None
+        raiz = QVBoxLayout(self)
+        raiz.setContentsMargins(0, 0, 0, 0)
+
+        g, lay = W.grupo("Módulo AD9833  ·  salida PGA / VOUT del módulo")
+        g.setStyleSheet(f"QGroupBox::title {{ color: {W.OK}; }}")
+        raiz.addWidget(g)
+        self.hab = W.boton("", self._cambio, chequeable=True)
+        self.hab.setChecked(self.c.habilitado)
+        W.tam(self.hab, "setMinimumHeight", 34)
+        lay.addWidget(self.hab)
+
+        self.forma = W.combo(M.DDS_FORMAS, self.c.forma)
+        self.frec = W.EntradaSI("Hz", M.DDS_F_MIN, M.DDS_F_MAX, self.c.frecuencia, 8)
+        self.periodo = W.EntradaSI("s", 1 / M.DDS_F_MAX, 1 / M.DDS_F_MIN, 1 / self.c.frecuencia, 6)
+        self.amp = W.EntradaSI("%", 0, 100, self.c.amplitud, 4)
+        lay.addWidget(W.fila("Forma", self.forma))
+        lay.addWidget(W.fila("Frecuencia", self.frec))
+        lay.addWidget(W.fila("Período", self.periodo))
+        lay.addWidget(W.fila("Amplitud", self.amp,
+                             ayuda="Posición del potenciómetro digital (MCP41010) que fija la "
+                                   "ganancia de la salida amplificada (PGA). Los volts se "
+                                   "calibran midiendo la salida."))
+        self.lbl_info = W.etiqueta_tenue("")
+        self.lbl_info.setWordWrap(True)
+        lay.addWidget(self.lbl_info)
+        lay.addWidget(W.etiqueta_tenue(
+            "Hasta ~1 MHz el seno sale limpio; más arriba aparecen escalones del DAC. "
+            "El osciloscopio del instrumento muestra bien hasta ~500 kHz."))
+        raiz.addStretch(1)
+
+        self.forma.currentIndexChanged.connect(self._cambio)
+        self.amp.cambiado.connect(self._cambio)
+        self.frec.cambiado.connect(lambda f: (self.periodo.set_valor(1 / f), self._cambio()))
+        self.periodo.cambiado.connect(lambda t: (self.frec.set_valor(1 / t), self._cambio()))
+        self._mostrar()
+
+    def _leer(self):
+        self.c.habilitado = self.hab.isChecked()
+        self.c.forma = self.forma.currentText()
+        self.c.frecuencia = self.frec.valor()
+        self.c.amplitud = self.amp.valor()
+
+    def _mostrar(self):
+        self.hab.setText("●  AD9833 ACTIVADO" if self.hab.isChecked() else "○  AD9833 APAGADO")
+        disp = self.tab.v.disp
+        if disp.esta_conectado and not self.tab.dds_soportado():
+            self.lbl_info.setText(f"<span style='color:{W.ALERTA}'>⚠ El firmware de la placa no "
+                                  "maneja el AD9833: cargá el firmware nuevo.</span>")
+            return
+        f = self.frec_real if self.frec_real is not None else M.dds_frecuencia_real(self.c.frecuencia)
+        quien = "confirmada por la placa" if self.frec_real is not None else "que va a salir"
+        self.lbl_info.setText(f"Frecuencia {quien}: {M.si(f, 'Hz', 9)} (paso de 0,093 Hz) · "
+                              f"potenciómetro {M.dds_paso_amplitud(self.c.amplitud)}/255")
+
+    def _cambio(self, *_):
+        self._leer()
+        self.frec_real = None
+        self._mostrar()
+        self.tab.programar_envio_dds()
+
+    def comandos(self) -> list[str]:
+        return M.dds_comandos(self.c)
+
+
 class TabGenerador(QWidget):
     def __init__(self, ventana):
         super().__init__()
@@ -214,6 +286,15 @@ class TabGenerador(QWidget):
             cuerpo.addWidget(sc, 1)
             self.paneles[c] = p
 
+        # módulo AD9833 externo
+        self._dds_enviado = None
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.dds = PanelDDS(self, cfg.get("dds"))
+        sc.setWidget(self.dds)
+        cuerpo.addWidget(sc, 1)
+
         # vista previa de un período
         self.prev = pg.PlotWidget(background=W.FONDO)
         self.prev.setMenuEnabled(False)
@@ -232,7 +313,19 @@ class TabGenerador(QWidget):
             p._cambio()
 
     def estado_config(self) -> dict:
-        return {f"ch{c}": asdict(p.c) for c, p in self.paneles.items()}
+        d = {f"ch{c}": asdict(p.c) for c, p in self.paneles.items()}
+        d["dds"] = asdict(self.dds.c)
+        return d
+
+    # ------------------------------------------------------------------ AD9833
+    def dds_soportado(self) -> bool:
+        """El firmware sabe manejar el AD9833 (lo avisa en INFO con dds_mclk)."""
+        return "dds_mclk" in self.v.disp.info
+
+    def programar_envio_dds(self):
+        self._pendientes.add("dds")
+        self.temporizador.start(80)
+        self.v.guardar_config_pronto()
 
     def actualizar_vista(self):
         if not hasattr(self, "curvas"):
@@ -263,12 +356,22 @@ class TabGenerador(QWidget):
     def reenviar_todo(self):
         self._ultimo_enviado = {1: None, 2: None}
         self._fases_enviadas = None
-        self._pendientes = {1, 2}
+        self._dds_enviado = None
+        self.dds.frec_real = None
+        self._pendientes = {1, 2, "dds"}
         self._enviar()
 
     def _enviar(self):
         if not self.v.disp.esta_conectado:
             return
+        if "dds" in self._pendientes:
+            self._pendientes.discard("dds")
+            if self.dds_soportado():
+                for cmd in self.dds.comandos():
+                    if self._dds_enviado is None or cmd not in self._dds_enviado:
+                        self.v.disp.enviar(cmd)
+                self._dds_enviado = self.dds.comandos()
+            self.dds._mostrar()
         for c in sorted(self._pendientes):
             p = self.paneles[c]
             cmds = p.comandos()
@@ -309,6 +412,12 @@ class TabGenerador(QWidget):
                 if pan.c.forma != "Continua":
                     txt += f"<br>Frecuencia confirmada: {M.si(f, 'Hz', 8)}"
                 pan.lbl_info.setText(txt)
+        elif linea.startswith("OK DDS ") and len(p) >= 3:
+            try:
+                self.dds.frec_real = float(p[2])
+            except ValueError:
+                return
+            self.dds._mostrar()
         elif linea.startswith("ERR GTBL"):
             self.v.estado("Error al enviar la tabla; se reintenta.", W.ALERTA)
             self.reenviar_todo()

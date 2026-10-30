@@ -18,7 +18,7 @@ Es el mismo código que el de la F767ZI. `placa.h` detecta el micro al compilar 
 7. Guardá con **Ctrl+S** y generá el código.
 
 ### Agregar los archivos
-Copiá los `.h` de `Core/Inc` de esta carpeta a **Core/Inc** del proyecto, y los `.c` de `Core/Src` a **Core/Src**. Son 7 `.h` (incluido `placa.h`) y 6 `.c`.
+Copiá los `.h` de `Core/Inc` de esta carpeta a **Core/Inc** del proyecto, y los `.c` de `Core/Src` a **Core/Src**. Son 8 `.h` (incluido `placa.h`) y 7 `.c`.
 
 ### Agregados en `Core/Src/main.c`
 ```c

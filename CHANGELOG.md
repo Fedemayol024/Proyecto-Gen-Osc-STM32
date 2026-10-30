@@ -19,6 +19,21 @@ La app (`VERSION` en `app/main.py`) y el firmware (`INSTR_VERSION` en `instrumen
 
 _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan a una sección con número y fecha._
 
+### Nuevo
+- **Módulo AD9833 (generador DDS externo).** Panel «Módulo AD9833» en la pestaña Generador: encender y apagar, forma (seno, triangular o cuadrada), frecuencia de 0,1 Hz a 12,5 MHz con paso de 0,093 Hz, y amplitud con el potenciómetro digital MCP41010 del módulo. La configuración se guarda y se reenvía al reconectar. Muestra la frecuencia confirmada por la placa.
+- Si el firmware de la placa no maneja el AD9833, la app no le manda esos comandos y avisa en el panel que hay que cargar el firmware nuevo.
+
+### Firmware
+- Nuevo `ad9833.c/.h` (en las dos placas): SPI por software en PC10 (CLK), PC12 (DAT), PD2 (FSY) y PG2 (CS). Comandos `DDS frec forma hab` y `DDSA paso`. `INFO?` agrega `dds_mclk=`. Al arrancar, el módulo queda apagado. Las palabras SPI se verificaron contra la hoja de datos simulando los pines en la PC.
+- **Hay que copiar `ad9833.c/.h` e `instrumento.c` al proyecto** (F767ZI y F429ZI) y recompilar.
+
+### Hardware
+- Diagrama `hardware/ad9833_conexion.png` actualizado con lo que confirmaron las fotos del módulo (AD9833 + MCP41010 + AD8051): alimentar con 3,3 V; VOUT es la salida directa y PGA la amplificada.
+
+### Pendiente de probar
+- Primera prueba real del módulo: frecuencia, las tres formas y el rango de amplitud en VOUT y en PGA, para calibrar los volts.
+- Bode con el AD9833 por encima de 100 kHz (necesita muestreo coherente; queda para después).
+
 ---
 
 ## [0.8.19 beta] · 2026-10-29 · La F429ZI vuelve a conectar

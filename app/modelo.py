@@ -688,6 +688,55 @@ def ruta_config(placa: str = PLACA_POR_DEFECTO) -> Path:
     return carpeta_config() / nombre
 
 
+# ---------------------------------------------------------------------------
+# Módulo AD9833 (DDS externo, con potenciómetro digital MCP41010 para la amplitud)
+# ---------------------------------------------------------------------------
+DDS_MCLK = 25e6                       # oscilador del módulo
+DDS_F_MIN, DDS_F_MAX = 0.1, 12.5e6
+DDS_FORMAS = ["Seno", "Triangular", "Cuadrada"]
+
+
+@dataclass
+class ConfigDDS:
+    habilitado: bool = False
+    forma: str = "Seno"
+    frecuencia: float = 100e3
+    amplitud: float = 50.0            # % del potenciómetro digital (0..100)
+
+    @staticmethod
+    def desde_dict(d: dict | None) -> "ConfigDDS":
+        c = ConfigDDS()
+        for k in asdict(c):
+            if isinstance(d, dict) and k in d:
+                setattr(c, k, d[k])
+        if c.forma not in DDS_FORMAS:
+            c.forma = "Seno"
+        try:
+            c.frecuencia = float(min(max(float(c.frecuencia), DDS_F_MIN), DDS_F_MAX))
+            c.amplitud = float(min(max(float(c.amplitud), 0.0), 100.0))
+        except (TypeError, ValueError):
+            c.frecuencia, c.amplitud = 100e3, 50.0
+        c.habilitado = bool(c.habilitado)
+        return c
+
+
+def dds_frecuencia_real(f: float) -> float:
+    """El AD9833 tiene 28 bits de frecuencia: paso de 25 MHz / 2^28 ≈ 0,093 Hz."""
+    f = min(max(f, 0.0), DDS_F_MAX)             # igual que el firmware
+    reg = min(round(f * 2**28 / DDS_MCLK), 2**28 - 1)
+    return reg * DDS_MCLK / 2**28
+
+
+def dds_paso_amplitud(porcentaje: float) -> int:
+    return int(round(min(max(porcentaje, 0.0), 100.0) / 100 * 255))
+
+
+def dds_comandos(c: ConfigDDS) -> list[str]:
+    forma = DDS_FORMAS.index(c.forma) if c.forma in DDS_FORMAS else 0
+    return [f"DDSA {dds_paso_amplitud(c.amplitud)}",
+            f"DDS {c.frecuencia:.4f} {forma} {1 if c.habilitado else 0}"]
+
+
 def ruta_preferencias() -> Path:
     return carpeta_config() / "preferencias.json"
 

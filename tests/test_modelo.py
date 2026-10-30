@@ -288,6 +288,18 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(M.ruta_config().name, "config.json")   # compatibilidad con lo anterior
         self.assertEqual(M.ruta_config("F429").name, "config_F429.json")
 
+    def test_ad9833_frecuencia_y_comandos(self):
+        self.assertAlmostEqual(M.dds_frecuencia_real(1000), 999.961, places=3)   # registro 10737
+        self.assertEqual(M.dds_frecuencia_real(20e6), 12.5e6)                # tope (Nyquist)
+        self.assertEqual(M.dds_paso_amplitud(100), 255)
+        self.assertEqual(M.dds_paso_amplitud(-5), 0)
+        c = M.ConfigDDS.desde_dict({"habilitado": True, "forma": "Triangular", "frecuencia": 2e6,
+                                    "amplitud": 50})
+        self.assertEqual(M.dds_comandos(c), ["DDSA 128", "DDS 2000000.0000 1 1"])
+        c = M.ConfigDDS.desde_dict({"forma": "Rara", "frecuencia": 1e9, "amplitud": "x"})
+        self.assertEqual((c.forma, c.habilitado), ("Seno", False))
+        self.assertEqual(c.frecuencia, 100e3)                          # valor inválido: por defecto
+
     def test_preferencias_de_placa(self):
         self.assertEqual(M.cargar_preferencias(), {"placa": "F767", "preguntar": True, "zoom": 1.0})
         M.guardar_preferencias({"placa": "F429", "preguntar": False})
