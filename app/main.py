@@ -11,11 +11,11 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer
-from PySide6.QtGui import QIcon, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QActionGroup, QIcon
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
-                               QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
-                               QStatusBar, QTabWidget, QVBoxLayout, QWidget)
+                               QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton,
+                               QStatusBar, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 import modelo as M
 import widgets as W
@@ -106,23 +106,6 @@ def elegir_placa(parent=None, forzar: bool = False) -> str | None:
     return dlg.placa
 
 
-class FiltroZoom(QObject):
-    """Ctrl + rueda del mouse en cualquier parte de la ventana cambia el zoom."""
-
-    def __init__(self, ventana):
-        super().__init__(ventana)
-        self.ventana = ventana
-
-    def eventFilter(self, obj, e):
-        if (e.type() == QEvent.Wheel and e.modifiers() & Qt.ControlModifier
-                and self.ventana.isActiveWindow()):
-            d = e.angleDelta().y()
-            if d:
-                self.ventana.cambiar_zoom(1 if d > 0 else -1)
-            return True
-        return False
-
-
 class Ventana(QMainWindow):
     def __init__(self, placa: str = M.PLACA_POR_DEFECTO, auto_puerto: str | None = None):
         super().__init__()
@@ -156,31 +139,22 @@ class Ventana(QMainWindow):
         barra.addWidget(W.boton("↻", self.actualizar_puertos))
         self.btn_con = W.boton("Conectar", self.alternar_conexion, primario=True)
         barra.addWidget(self.btn_con)
-        self.lbl_con = QLabel("● Desconectado")
+        # el texto de conexión es largo: se recorta con «…» si no entra (antes ensanchaba
+        # la ventana más allá de la pantalla en las notebooks)
+        self.lbl_con = W.EtiquetaRecortable("● Desconectado")
         self.lbl_con.setStyleSheet(f"color: {W.TENUE};")
-        barra.addWidget(self.lbl_con)
-        barra.addStretch(1)
-        # zoom de la interfaz
-        lbl_zoom = QLabel("Tamaño")
-        lbl_zoom.setObjectName("tenue")
-        barra.addWidget(lbl_zoom)
-        self.btn_zoom_menos = W.boton("A−", lambda: self.cambiar_zoom(-1))
-        self.btn_zoom = W.boton("100 %", lambda: self.cambiar_zoom(0))
-        self.btn_zoom_mas = W.boton("A+", lambda: self.cambiar_zoom(+1))
-        self.btn_zoom_menos.setToolTip("Achicar la interfaz (Ctrl −, o Ctrl + rueda del mouse)")
-        self.btn_zoom.setToolTip("Volver al 100 % (Ctrl 0)")
-        self.btn_zoom_mas.setToolTip("Agrandar la interfaz (Ctrl +, o Ctrl + rueda del mouse)")
-        for b in (self.btn_zoom_menos, self.btn_zoom, self.btn_zoom_mas):
-            barra.addWidget(b)
+        barra.addWidget(self.lbl_con, 1)
+        # opciones gráficas (ruedita): resolución de la interfaz
+        self.btn_opciones = QToolButton()
+        self.btn_opciones.setText("⚙")
+        self.btn_opciones.setObjectName("ruedita")
+        self.btn_opciones.setToolTip("Opciones gráficas: resolución de la interfaz")
+        self.btn_opciones.setPopupMode(QToolButton.InstantPopup)
+        self.menu_opciones = QMenu(self)
+        self.menu_opciones.aboutToShow.connect(self._armar_menu_opciones)
+        self.btn_opciones.setMenu(self.menu_opciones)
+        barra.addWidget(self.btn_opciones)
         raiz.addLayout(barra)
-        for tecla, paso in (("Ctrl++", 1), ("Ctrl+=", 1), ("Ctrl+-", -1), ("Ctrl+0", 0)):
-            QShortcut(QKeySequence(tecla), self, lambda p=paso: self.cambiar_zoom(p))
-        self._zoom_pendiente = None
-        self._t_zoom = QTimer(self)
-        self._t_zoom.setSingleShot(True)
-        self._t_zoom.timeout.connect(self.aplicar_zoom)
-        self._filtro_zoom = FiltroZoom(self)
-        QApplication.instance().installEventFilter(self._filtro_zoom)
         W.al_cambiar_escala(self._escala_cambiada)
 
         self._t_guardar = QTimer(self)
@@ -225,34 +199,93 @@ class Ventana(QMainWindow):
                     QTimer.singleShot(400, self.alternar_conexion)
                     break
 
-    # -------------------------------------------------------------- zoom
-    def cambiar_zoom(self, paso: int):
-        """paso: +1 agranda, -1 achica, 0 vuelve al 100 %. Se aplica un instante después
-        (re-dibujar toda la interfaz lleva su tiempo y así la rueda del mouse no se traba)."""
-        actual = self._zoom_pendiente or W.ESCALA
-        if paso == 0:
-            nueva = 1.0
-        else:
-            i = min(range(len(W.ZOOMS)), key=lambda k: abs(W.ZOOMS[k] - actual))
-            nueva = W.ZOOMS[max(0, min(len(W.ZOOMS) - 1, i + paso))]
-        self._zoom_pendiente = nueva
-        self.btn_zoom.setText(f"{round(nueva * 100)} %")
-        self._t_zoom.start(220)
+    # -------------------------------------------------------------- opciones gráficas
+    def resolucion_pantalla(self) -> tuple[int, int]:
+        """Resolución real (píxeles físicos) de la pantalla donde está la ventana."""
+        pantalla = self.screen() or QApplication.primaryScreen()
+        return resolucion_de(pantalla)
 
-    def aplicar_zoom(self):
-        self._t_zoom.stop()
-        nueva, self._zoom_pendiente = self._zoom_pendiente, None
-        if nueva is None or abs(nueva - W.ESCALA) < 1e-6:
+    def _armar_menu_opciones(self):
+        m = self.menu_opciones
+        m.clear()
+        pant = self.resolucion_pantalla()
+        elegida = M.resolucion_guardada()
+        titulo = m.addAction("Resolución de la interfaz")
+        titulo.setEnabled(False)
+        grupo = QActionGroup(m)
+        grupo.setExclusive(True)
+
+        def opcion(texto, res):
+            a = m.addAction(texto)
+            a.setCheckable(True)
+            a.setChecked(res == elegida)
+            a.triggered.connect(lambda _=False, r=res: self.elegir_resolucion(r))
+            grupo.addAction(a)
+            return a
+
+        opcion(f"Automática · la de la pantalla ({M.texto_resolucion(pant)})", None)
+        m.addSeparator()
+        for res in M.RESOLUCIONES:
+            e = M.escala_para(res, pant)
+            if not (M.ESCALA_MIN <= min(pant[0] / res[0], pant[1] / res[1]) <= M.ESCALA_MAX):
+                continue
+            if res == pant:
+                nota = "igual a la pantalla"
+            elif e > 1:
+                nota = f"todo más grande · {round(e * 100)} %"
+            else:
+                nota = f"entra más · {round(e * 100)} %"
+            opcion(f"{M.texto_resolucion(res)}   ({nota})", res)
+        m.addSeparator()
+        a = m.addAction("Ajustar la ventana a la pantalla")
+        a.triggered.connect(lambda: self.ajustar_a_pantalla(forzar=True))
+
+    def elegir_resolucion(self, res: tuple[int, int] | None):
+        M.guardar_resolucion(res)
+        escala = M.escala_para(res, self.resolucion_pantalla())
+        if abs(escala - W.ESCALA) > 1e-6:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                W.aplicar_escala(QApplication.instance(), escala)
+            finally:
+                QApplication.restoreOverrideCursor()
+        self.ajustar_a_pantalla()
+        QTimer.singleShot(0, self.ajustar_a_pantalla)     # por si el layout termina de crecer después
+        nombre = M.texto_resolucion(res) if res else "automática (la de la pantalla)"
+        self.estado(f"Resolución de la interfaz: {nombre} · escala {round(escala * 100)} %.", W.OK)
+
+    def ajustar_a_pantalla(self, forzar: bool = False):
+        """Que la ventana entre en la pantalla: si lo mínimo que necesita no entra, se
+        maximiza (y se avisa); si sobra lugar, se respeta el tamaño que tenga."""
+        if self.isFullScreen():
             return
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            W.aplicar_escala(QApplication.instance(), nueva)
-        finally:
-            QApplication.restoreOverrideCursor()
-        M.guardar_zoom(nueva)
+        pantalla = self.screen() or QApplication.primaryScreen()
+        libre = pantalla.availableGeometry()
+        minimo = self.minimumSizeHint()
+        if minimo.width() > libre.width() or minimo.height() > libre.height():
+            self.showMaximized()
+            self.estado("La interfaz no entra en esta pantalla: elegí una resolución más grande "
+                        "en ⚙ (Opciones gráficas).", W.ALERTA)
+            return
+        if self.isMaximized() and not forzar:
+            return
+        ancho = min(max(self.width(), minimo.width()), libre.width())
+        alto = min(max(self.height(), minimo.height()), libre.height())
+        if forzar:
+            self.showNormal()
+            ancho, alto = libre.width(), libre.height()
+        # El borde de la ventana (barra de título) suma al tamaño: se calcula con el
+        # tamaño NUEVO, no con el que tenía antes de agrandarse.
+        g = self.frameGeometry()
+        borde_x, borde_y = g.width() - self.width(), g.height() - self.height()
+        ancho = min(ancho, libre.width() - borde_x)
+        alto = min(alto, libre.height() - borde_y)
+        self.resize(ancho, alto)
+        x = min(max(g.x(), libre.x()), libre.right() + 1 - (ancho + borde_x))
+        y = min(max(g.y(), libre.y()), libre.bottom() + 1 - (alto + borde_y))
+        self.move(max(x, libre.x()), max(y, libre.y()))
 
     def _escala_cambiada(self):
-        self.btn_zoom.setText(f"{round(W.ESCALA * 100)} %")
         W.escalar_graficos(self)
         for w in self.findChildren(QWidget):
             w.update()
@@ -468,9 +501,18 @@ class Ventana(QMainWindow):
         super().closeEvent(e)
 
 
+def resolucion_de(pantalla) -> tuple[int, int]:
+    """Píxeles físicos de una pantalla (Qt da medidas lógicas, ya divididas por el
+    escalado de Windows: 1920×1080 al 150 % aparece como 1280×720)."""
+    if pantalla is None:
+        return (1920, 1080)
+    g, r = pantalla.geometry(), pantalla.devicePixelRatio()
+    return (round(g.width() * r), round(g.height() * r))
+
+
 def main():
     app = QApplication(sys.argv)
-    W.ESCALA = M.zoom_guardado()
+    W.ESCALA = M.escala_para(M.resolucion_guardada(), resolucion_de(app.primaryScreen()))
     app.setStyleSheet(W.estilo())
     ico = recurso("icono.ico")
     if Path(ico).exists():
@@ -480,6 +522,7 @@ def main():
         return
     app._ventana = Ventana(placa)
     app._ventana.show()
+    QTimer.singleShot(0, app._ventana.ajustar_a_pantalla)
     sys.exit(app.exec())
 
 

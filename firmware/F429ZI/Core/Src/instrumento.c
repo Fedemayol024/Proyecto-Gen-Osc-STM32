@@ -21,7 +21,7 @@
  *   CAPX                        -> OK CAPX          (cancela la captura)
  *   FCNT ms continuo            -> FREQ f metodo flancos ms  (ms = 0 detiene)
  *   PWM frec ciclo tm_ns hab    -> OK PWM frec_real ciclo_real tm_real
- *   STAT?                       -> STAT subejec=.. osc=.. osc_err=.. tx_perd=..
+ *   STAT?                       -> STAT subejec=.. osc=.. osc_err=.. tx_perd=.. osc_rein=..
  *   DDS frec forma hab          -> OK DDS frec_real    (módulo AD9833; forma 0 seno,
  *                                                       1 triangular, 2 cuadrada)
  *   DDSA paso                   -> OK DDSA paso        (amplitud, 0..255)
@@ -371,8 +371,9 @@ static void procesar_linea(char *l)
   }
 
   if (!strcmp(c0, "STAT?")) {
-    responder("STAT subejec=%lu osc=%d osc_err=%lu tx_perd=%lu", (unsigned long)gen_subejecuciones(),
-              osc_ocupado(), (unsigned long)osc_errores(), (unsigned long)tx_perdidas_total);
+    responder("STAT subejec=%lu osc=%d osc_err=%lu tx_perd=%lu osc_rein=%lu", (unsigned long)gen_subejecuciones(),
+              osc_ocupado(), (unsigned long)osc_errores(), (unsigned long)tx_perdidas_total,
+              (unsigned long)osc_reintentos());
     return;
   }
 
@@ -483,6 +484,7 @@ void instrumento_lazo(void)
     cap_pendiente = 0;
     osc_capturar(&cap_param);
   }
+  osc_vigilar();                         /* captura trabada: rearmarla */
 
   fcnt_resultado_t r;
   if (fcnt_resultado(&r)) {

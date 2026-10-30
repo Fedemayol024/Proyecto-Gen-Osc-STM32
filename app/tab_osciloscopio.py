@@ -484,6 +484,9 @@ class TabOsciloscopio(QWidget):
         self.timeout = 2.0
         self.ultimo = None          # último cuadro (dict) en volts
         self.autoset_estado = None
+        # Single/Autoset pedidos mientras viajaba otra captura: se arrancan
+        # cuando esa llega (no se le manda a la placa una captura encimada).
+        self.accion_pendiente: str | None = None
         self._fps_t = time.monotonic()
         self._fps_n = 0
         self.fps = 0.0
@@ -811,20 +814,37 @@ class TabOsciloscopio(QWidget):
             return
         if self.esperando and time.monotonic() - self.t_pedido > self.timeout:
             self.esperando = False
-            if self.corriendo or self.autoset_estado:
+            if self._ejecutar_pendiente():
+                return
+            if self.autoset_estado:
+                self._autoset_pedir()
+            elif self.corriendo:
                 self.pedir()
+
+    def _ejecutar_pendiente(self) -> bool:
+        """Arranca el Single o Autoset que quedó esperando. True si había uno."""
+        accion, self.accion_pendiente = self.accion_pendiente, None
+        if accion == "unico":
+            self._unico_iniciar()
+        elif accion == "autoset":
+            self._autoset_iniciar()
+        return accion is not None
 
     def al_conectar(self):
         self.esperando = False
+        self.accion_pendiente = None
         if not self.corriendo:
             self._alternar_run()
 
     def al_desconectar(self):
         self.esperando = False
+        self.accion_pendiente = None
         self._set_run(False)
 
     def al_recibir(self, d: dict):
         self.esperando = False
+        if self._ejecutar_pendiente():      # esta captura era de antes del botón
+            return
         if self.autoset_estado:
             self._autoset_paso(d)
             return
@@ -840,6 +860,7 @@ class TabOsciloscopio(QWidget):
         if self.unico:
             self.unico = False
             self._set_run(False)
+            self.v.estado("Single: captura lista.", W.OK)
         else:
             self.pedir()
 
@@ -1106,23 +1127,48 @@ class TabOsciloscopio(QWidget):
             self.v.estado("Conectá la placa primero.", W.ALERTA)
             return
         self.unico = False
+        self.accion_pendiente = None
+        self.autoset_estado = None
         self._set_run(not self.corriendo)
         if self.corriendo and not self.esperando:
             self.pedir()
 
+    # Single y Autoset no le piden una captura a la placa mientras otra está en
+    # camino: el firmware hasta la 0.8.19 abortaba la captura a la mitad y el
+    # ADC quedaba trabado (el trazo se congelaba hasta reconectar la placa).
     def _unico(self):
         if not self.v.disp.esta_conectado:
+            self.v.estado("Conectá la placa primero.", W.ALERTA)
             return
+        if self.esperando:
+            self.accion_pendiente = "unico"
+            self.unico = True
+            self._set_run(True)
+            return
+        self._unico_iniciar()
+
+    def _unico_iniciar(self):
+        self.autoset_estado = None
         self.unico = True
         self._set_run(True)
+        if self.fuente.currentText() != "Libre":
+            self.v.estado("Single: esperando el disparo… (tocá STOP para cancelar)", W.TEXTO)
         self.pedir()
 
     # ------------------------------------------------------------ autoset
     def _autoset(self):
         if not self.v.disp.esta_conectado:
+            self.v.estado("Conectá la placa primero.", W.ALERTA)
             return
-        self.autoset_estado = {"fs": self.v.disp.info.get("osc_fsmax", 1.6e6)}
         self.v.estado("Autoset: buscando la señal…", W.TEXTO)
+        if self.esperando:
+            self.accion_pendiente = "autoset"
+            return
+        self._autoset_iniciar()
+
+    def _autoset_iniciar(self):
+        self.unico = False
+        self.autoset_estado = {"fs": self.v.disp.info.get("osc_fsmax", 1.6e6)}
         self._autoset_pedir()
 
     def _autoset_pedir(self):

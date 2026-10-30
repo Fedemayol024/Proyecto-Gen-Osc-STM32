@@ -300,15 +300,29 @@ class TestConfig(unittest.TestCase):
         self.assertEqual((c.forma, c.habilitado), ("Seno", False))
         self.assertEqual(c.frecuencia, 100e3)                          # valor inválido: por defecto
 
+    def test_escala_segun_resolucion(self):
+        pant = (1920, 1080)
+        self.assertEqual(M.escala_para(None, pant), 1.0)                  # automática
+        self.assertEqual(M.escala_para((1920, 1080), pant), 1.0)
+        self.assertEqual(M.escala_para((1280, 720), pant), 1.5)           # más chica: todo más grande
+        self.assertEqual(M.escala_para((3840, 2160), pant), 0.5)          # más grande: entra más
+        self.assertAlmostEqual(M.escala_para((1366, 768), pant), 1.406, places=3)
+        self.assertEqual(M.escala_para((640, 360), (3840, 2160)), M.ESCALA_MAX)
+        self.assertEqual(M.leer_resolucion("1920×1080"), (1920, 1080))
+        self.assertIsNone(M.leer_resolucion("auto"))
+
     def test_preferencias_de_placa(self):
-        self.assertEqual(M.cargar_preferencias(), {"placa": "F767", "preguntar": True, "zoom": 1.0})
+        auto = {"placa": "F767", "preguntar": True, "resolucion": "auto"}
+        self.assertEqual(M.cargar_preferencias(), auto)
         M.guardar_preferencias({"placa": "F429", "preguntar": False})
-        self.assertEqual(M.cargar_preferencias(), {"placa": "F429", "preguntar": False, "zoom": 1.0})
-        M.guardar_zoom(1.4)
-        self.assertEqual(M.zoom_guardado(), 1.4)
+        self.assertEqual(M.cargar_preferencias(), {"placa": "F429", "preguntar": False, "resolucion": "auto"})
+        M.guardar_resolucion((1366, 768))
+        self.assertEqual(M.resolucion_guardada(), (1366, 768))
         self.assertEqual(M.cargar_preferencias()["placa"], "F429")         # no pisa lo demás
-        M.ruta_preferencias().write_text('{"zoom": 50}', encoding="utf-8")
-        self.assertEqual(M.zoom_guardado(), 1.0)                           # valor absurdo
+        M.guardar_resolucion(None)
+        self.assertIsNone(M.resolucion_guardada())
+        M.ruta_preferencias().write_text('{"resolucion": "gigante", "zoom": 1.4}', encoding="utf-8")
+        self.assertIsNone(M.resolucion_guardada())                        # valor absurdo / viejo
         M.ruta_preferencias().write_text('{"placa": "F999"}', encoding="utf-8")
         self.assertEqual(M.cargar_preferencias()["placa"], "F767")   # placa desconocida
 

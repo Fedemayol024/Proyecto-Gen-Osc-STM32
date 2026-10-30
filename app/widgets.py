@@ -5,7 +5,7 @@ import math
 import weakref
 
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QComboBox, QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QSizePolicy, QVBoxLayout, QWidget)
@@ -30,7 +30,6 @@ REJILLA = "#26303b"
 # Escala de la interfaz (zoom): todo lo que tiene tamaño pasa por pt() o px()
 # ---------------------------------------------------------------------------
 ESCALA = 1.0
-ZOOMS = [0.8, 0.9, 1.0, 1.1, 1.25, 1.4, 1.6, 1.8, 2.0]
 
 
 def pt(n: float) -> float:
@@ -80,6 +79,15 @@ QHeaderView::section {{ background: {PANEL}; color: {TENUE}; border: none; borde
                        padding: {px(4)}px {px(6)}px; font-weight: 600; }}
 QSpinBox::up-button, QDoubleSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::down-button {{ width: {px(16)}px; }}
 QToolTip {{ background: {PANEL}; color: {TEXTO}; border: {px(1)}px solid {BORDE}; }}
+QToolButton#ruedita {{ background: #21262d; border: {px(1)}px solid {BORDE}; border-radius: {px(6)}px;
+                      font-size: {pt(14)}pt; padding: {px(1)}px {px(8)}px; }}
+QToolButton#ruedita:hover {{ background: #30363d; }}
+QToolButton#ruedita::menu-indicator {{ image: none; width: 0; }}
+QMenu {{ background: {PANEL}; border: {px(1)}px solid {BORDE}; padding: {px(4)}px; }}
+QMenu::item {{ padding: {px(6)}px {px(22)}px {px(6)}px {px(26)}px; border-radius: {px(4)}px; }}
+QMenu::item:selected {{ background: {ACENTO}; color: white; }}
+QMenu::item:disabled {{ color: {TENUE}; font-weight: 600; }}
+QMenu::separator {{ height: {px(1)}px; background: {BORDE}; margin: {px(4)}px {px(6)}px; }}
 """
 
 
@@ -134,7 +142,7 @@ def escalar_graficos(raiz: QWidget):
 def aplicar_escala(app, escala: float):
     """Cambia el zoom en vivo: estilo, tamaños registrados y gráficos."""
     global ESCALA
-    escala = float(min(max(escala, ZOOMS[0]), ZOOMS[-1]))
+    escala = float(min(max(escala, M.ESCALA_MIN), M.ESCALA_MAX))
     if abs(escala - ESCALA) < 1e-9:
         return
     ESCALA = escala
@@ -255,6 +263,45 @@ class EntradaSI(QWidget):
             paso = 10 ** (math.floor(math.log10(abs(v))) - 1)
         self.set_valor(round((v + paso_dir * paso) / paso) * paso, emitir=True)
         e.accept()
+
+
+class EtiquetaRecortable(QLabel):
+    """Etiqueta de una línea que, si no entra, se recorta con «…» (el texto completo
+    queda en el tooltip). Así un texto largo no obliga a la ventana a ser más ancha
+    que la pantalla."""
+
+    def __init__(self, texto: str = ""):
+        super().__init__()
+        self._completo = ""
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setMinimumWidth(40)
+        self.setText(texto)
+
+    def setText(self, texto: str):
+        self._completo = texto
+        self.setToolTip(texto)
+        self._recortar()
+
+    def text(self) -> str:
+        return self._completo
+
+    def sizeHint(self):
+        h = super().sizeHint()
+        h.setWidth(self.fontMetrics().horizontalAdvance(self._completo) + 8)
+        return h
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._recortar()
+
+    def changeEvent(self, e):
+        super().changeEvent(e)
+        if e.type() in (QEvent.FontChange, QEvent.StyleChange):
+            self._recortar()
+
+    def _recortar(self):
+        visible = self.fontMetrics().elidedText(self._completo, Qt.ElideRight, max(self.width() - 4, 10))
+        super().setText(visible)
 
 
 def fila(etiqueta: str, *widgets, ayuda: str = "") -> QWidget:
