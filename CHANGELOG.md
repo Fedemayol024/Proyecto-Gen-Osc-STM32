@@ -22,6 +22,7 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
 ### Nuevo
 - **Módulo AD9833 (generador DDS externo).** Panel «Módulo AD9833» en la pestaña Generador: encender y apagar, forma (seno, triangular o cuadrada), frecuencia de 0,1 Hz a 12,5 MHz con paso de 0,093 Hz, y amplitud con el potenciómetro digital MCP41010 del módulo. La configuración se guarda y se reenvía al reconectar. Muestra la frecuencia confirmada por la placa.
 - Si el firmware de la placa no maneja el AD9833, la app no le manda esos comandos y avisa en el panel que hay que cargar el firmware nuevo.
+- **Pestaña Placa:** esquema «Módulo AD9833» en Conexiones (los 6 cables de CN8 y la salida PGA), sus pines marcados en el dibujo de la placa (D45, D47, D48, D49) y una sección con sus capacidades.
 
 ### Corregido
 - **El trazo se congelaba al tocar Single o Autoset** (en las dos placas) y solo volvía reconectando la placa. Esos dos botones pedían una captura nueva mientras la anterior todavía estaba en curso, y el firmware la cortaba a la mitad: el ADC dual quedaba en *overrun* y no volvía a entregar datos. Ahora:

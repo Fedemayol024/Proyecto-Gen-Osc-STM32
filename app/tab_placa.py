@@ -41,6 +41,12 @@ ESPEC = [
     ("Osciloscopio", "Entrada pin directo", "0 a 3,3 V — nunca más ni negativo", None),
     ("Osciloscopio", "Entrada con la placa", "±10 V o ±1 V (×10), 1 MΩ, acople AC/DC", None),
 
+    ("Módulo AD9833 (opcional)", "Generador", "DDS de 28 bits, oscilador de 25 MHz", None),
+    ("Módulo AD9833 (opcional)", "Formas", "seno, triangular y cuadrada", None),
+    ("Módulo AD9833 (opcional)", "Frecuencia", "0,1 Hz a 12,5 MHz · paso de 0,093 Hz (limpio hasta ~1 MHz)", None),
+    ("Módulo AD9833 (opcional)", "Amplitud", "potenciómetro digital MCP41010 (256 pasos) + AD8051", None),
+    ("Módulo AD9833 (opcional)", "Conexión", "CN8: D45 CLK, D47 DAT, D48 FSY, D49 CS · VCC a 3,3 V", None),
+
     ("Bode", "Rango", "~1 Hz a ~100 kHz (lo limita el generador)", None),
     ("Bode", "Rango dinámico", "~60 dB (ADC de 12 bits con ajuste senoidal)", None),
 
@@ -92,6 +98,7 @@ C_FREC = "#c58cff"
 C_PWM = "#56d364"
 C_GND = "#8b949e"
 C_3V3 = "#f85149"
+C_DDS = "#f778ba"
 
 # (conector, pin) -> (rótulo, pin del micro, función, color)
 USADOS = {
@@ -102,7 +109,12 @@ USADOS = {
     ("CN10", 29): ("D32", "PA0", "Frecuencímetro", C_FREC),
     ("CN10", 4): ("D6", "PE9", "PWM", C_PWM),
     ("CN10", 18): ("D42", "PE8", "PWM complementario", C_PWM),
-    ("CN8", 7): ("+3V3", "", "Referencia de las etapas", C_3V3),
+    ("CN8", 7): ("+3V3", "", "Etapas y AD9833", C_3V3),
+    ("CN8", 6): ("D45", "PC10", "AD9833: CLK", C_DDS),
+    ("CN8", 10): ("D47", "PC12", "AD9833: DAT", C_DDS),
+    ("CN8", 12): ("D48", "PD2", "AD9833: FSY", C_DDS),
+    ("CN8", 14): ("D49", "PG2", "AD9833: CS", C_DDS),
+    ("CN8", 11): ("GND", "", "Masa del AD9833", C_GND),
     ("CN9", 12): ("GND", "", "Masa", C_GND),
 }
 
@@ -303,6 +315,9 @@ ESQUEMAS = {
     "Frecuencímetro y PWM": [
         ("frecpwm",),
     ],
+    "Módulo AD9833 (generador hasta 12,5 MHz)": [
+        ("dds",),
+    ],
 }
 
 
@@ -444,6 +459,35 @@ class DibujoConexiones(QWidget):
                        "Directo a los pines solo se puede medir entre 0 y 3,3 V. Para señales "
                        "reales (negativas o más grandes) pasá por la etapa de entrada y elegí "
                        "en la app la «Entrada» que coincida con la llave de rango.")
+        elif tipo == "dds":
+            filas = [("+3V3", "VCC", C_3V3), ("GND", "GND", C_GND), ("D45 · PC10", "CLK", C_DDS),
+                     ("D47 · PC12", "DAT", C_DDS), ("D48 · PD2", "FSY", C_DDS), ("D49 · PG2", "CS", C_DDS)]
+            pins = [(pin_n(i, len(filas)), t, c) for i, (t, _, c) in enumerate(filas)]
+            for pt, t, c in pins:
+                self._pin(p, pt, t, c, derecha=False)
+            mod = QRectF(x_pin + 110, nuc.top() - 20, 160, nuc.height() + 30)
+            self._bloque(p, mod, "Módulo AD9833", "con MCP41010 y AD8051", C_DDS)
+            p.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            for (pt, _, c), (_, nombre, _) in zip(pins, filas):
+                self._cable(p, [pt, QPointF(mod.left(), pt.y())], c)
+                p.setPen(QColor(W.TEXTO))
+                p.drawText(QRectF(mod.left() + 8, pt.y() - 10, 60, 20), Qt.AlignVCenter | Qt.AlignLeft, nombre)
+            # salida: PGA (amplificada) al circuito, por la BNC
+            ys = mod.top() + mod.height() * 0.3
+            sal = QRectF(mod.right() + 60, ys - 40, 130, 80)
+            self._bloque(p, sal, "Circuito / BNC", "sonda ×1", "#d29922")
+            self._cable(p, [QPointF(mod.right(), ys - 12), QPointF(sal.left(), ys - 12)], C_DDS)
+            self._cable(p, [QPointF(mod.right(), ys + 12), QPointF(sal.left(), ys + 12)], C_GND)
+            p.setPen(QColor(W.TEXTO))
+            p.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            p.drawText(QRectF(mod.right() - 68, ys - 22, 60, 20), Qt.AlignVCenter | Qt.AlignRight, "PGA")
+            p.drawText(QRectF(mod.right() - 68, ys + 2, 60, 20), Qt.AlignVCenter | Qt.AlignRight, "GND")
+            self._nota(p, QRectF(mod.right() + 20, sal.bottom() + 20, w - mod.right() - 30,
+                                 nuc.bottom() - sal.bottom() - 10),
+                       "Seis cables, todos del conector CN8. Alimentá el módulo con 3,3 V (no 5 V): "
+                       "así el potenciómetro de amplitud reconoce bien las señales de la placa.\n\n"
+                       "PGA = salida amplificada (amplitud ajustable desde la app). VOUT = salida "
+                       "directa del AD9833 (~0,6 Vpp). Se maneja desde Generador → Módulo AD9833.")
         else:  # frecuencímetro y PWM
             pins = [(pin_n(0), "D32 · Frecuencímetro", C_FREC), (pin_n(1), "D6 · PWM", C_PWM),
                     (pin_n(2), "D42 · PWM complementario", C_PWM), (pin_n(3), "GND", C_GND)]
