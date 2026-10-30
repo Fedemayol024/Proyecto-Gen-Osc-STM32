@@ -147,7 +147,8 @@ def texto_watchdog(info: dict) -> str:
 class DibujoPlaca(QWidget):
     """Vista superior esquemática (no a escala) de una Nucleo-144, con el ST-LINK arriba."""
 
-    MARGEN = 250          # lugar para los rótulos a cada lado (px)
+    MARGEN = 300          # lugar para los rótulos y sus cables a cada lado (px)
+    CARRIL = 7            # separación entre los cables verticales (px)
     ANCHO_ROT = 215
     ALTO_ROT = 38
 
@@ -227,6 +228,7 @@ class DibujoPlaca(QWidget):
 
         # conectores
         paso = 2.54 * mm
+        self._paso = paso
         rot_izq, rot_der = [], []
         self._conector(p, "CN8", CN8, x0 + 5 * mm, y0 + 36 * mm, paso, rot_izq)
         self._conector(p, "CN9", CN9, x0 + 5 * mm, y0 + 62 * mm, paso, rot_izq)
@@ -260,29 +262,44 @@ class DibujoPlaca(QWidget):
                 r = paso * (0.38 if usado else 0.22)
                 p.drawEllipse(c, r, r)
                 if usado:
-                    rotulos.append((c, usado, f"{nombre}-{num}"))
+                    rotulos.append((c, usado, f"{nombre}-{num}", col))
         p.setPen(QPen(QColor("#e5e7eb"), 1))         # marca del pin 1
         p.setBrush(Qt.NoBrush)
         p.drawRect(QRectF(x + 0.08 * paso, y + 0.08 * paso, 0.84 * paso, 0.84 * paso))
 
     def _rotulos(self, p, rotulos, izquierda):
-        """Ubica los rótulos al costado de la placa sin que se pisen."""
-        rotulos.sort(key=lambda r: r[0].y())
+        """Ubica los rótulos al costado de la placa sin que se pisen, y cada cable por
+        su propio camino:
+        - el pin de la columna de adentro (la más lejos de los rótulos) sale primero al
+          hueco entre filas, así no pasa por encima del pin de al lado;
+        - cada cable baja por su propio carril vertical; los de arriba van por los
+          carriles más de afuera, así ningún cable cruza a otro."""
+        mitad = self._paso / 2
+        lista = []
+        for c, usado, cn, col in rotulos:
+            adentro = (col == 1) if izquierda else (col == 0)
+            salida = QPointF(c.x(), c.y() - mitad) if adentro else QPointF(c)
+            lista.append((salida, c, usado, cn))
+        lista.sort(key=lambda r: r[0].y())
+        n = len(lista)
+        borde = (self._x0 - 10) if izquierda else (self._x0 + self._ancho + 10)
+        signo = -1 if izquierda else 1
+        ultimo = borde + signo * (n - 1) * self.CARRIL          # carril más de afuera
         y_libre = -1e9
-        for c, (rot, pin, funcion, color), cn in rotulos:
-            y = max(c.y() - self.ALTO_ROT / 2, y_libre)
+        for k, (salida, c, (rot, pin, funcion, color), cn) in enumerate(lista):
+            y = max(salida.y() - self.ALTO_ROT / 2, y_libre)
             y_libre = y + self.ALTO_ROT + 6
+            carril = borde + signo * (n - 1 - k) * self.CARRIL    # arriba = más afuera
             if izquierda:
-                caja = QRectF(self._x0 - 24 - self.ANCHO_ROT, y, self.ANCHO_ROT, self.ALTO_ROT)
+                caja = QRectF(ultimo - 14 - self.ANCHO_ROT, y, self.ANCHO_ROT, self.ALTO_ROT)
                 ancla = QPointF(caja.right(), caja.center().y())
-                codo = QPointF(self._x0 - 10, caja.center().y())
             else:
-                caja = QRectF(self._x0 + self._ancho + 24, y, self.ANCHO_ROT, self.ALTO_ROT)
+                caja = QRectF(ultimo + 14, y, self.ANCHO_ROT, self.ALTO_ROT)
                 ancla = QPointF(caja.left(), caja.center().y())
-                codo = QPointF(self._x0 + self._ancho + 10, caja.center().y())
             path = QPainterPath(c)
-            path.lineTo(QPointF(codo.x(), c.y()))
-            path.lineTo(codo)
+            path.lineTo(salida)
+            path.lineTo(QPointF(carril, salida.y()))
+            path.lineTo(QPointF(carril, ancla.y()))
             path.lineTo(ancla)
             p.setPen(QPen(QColor(color), 1.6))
             p.setBrush(Qt.NoBrush)
