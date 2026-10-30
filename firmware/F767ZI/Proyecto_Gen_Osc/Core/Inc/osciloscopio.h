@@ -34,6 +34,10 @@ double   osc_fs_max(void);
 /* Arranca una captura. Devuelve la frecuencia de muestreo real. */
 double   osc_capturar(const osc_param_t *p);
 void     osc_abortar(void);
+/* Rearma la captura si quedó trabada (llamar desde el lazo principal) */
+void     osc_vigilar(void);
+/* Capturas rearmadas por osc_vigilar() desde el arranque */
+uint32_t osc_reintentos(void);
 /* Cantidad de capturas abortadas por error de DMA desde el arranque */
 uint32_t osc_errores(void);
 

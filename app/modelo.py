@@ -692,30 +692,62 @@ def ruta_preferencias() -> Path:
     return carpeta_config() / "preferencias.json"
 
 
+# Resoluciones que se ofrecen en Opciones gráficas (ancho, alto en píxeles reales).
+# Funciona como en los juegos: con una resolución más chica que la de la pantalla todo se
+# ve más grande, y con una más grande entra más en la misma pantalla.
+RESOLUCIONES = [(1280, 720), (1366, 768), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160)]
+RESOLUCION_AUTO = "auto"            # la misma que la pantalla (escala 1, la que elige Windows)
+ESCALA_MIN, ESCALA_MAX = 0.5, 2.5
+
+
+def texto_resolucion(res: tuple[int, int]) -> str:
+    return f"{res[0]}×{res[1]}"
+
+
+def leer_resolucion(texto) -> tuple[int, int] | None:
+    """'1920x1080' (o '1920×1080') -> (1920, 1080). Cualquier otra cosa -> None (automática)."""
+    try:
+        a, b = str(texto).lower().replace("×", "x").split("x")
+        res = (int(a), int(b))
+    except (ValueError, AttributeError):
+        return None
+    return res if 320 <= res[0] <= 16384 and 240 <= res[1] <= 16384 else None
+
+
+def escala_para(resolucion: tuple[int, int] | None, pantalla: tuple[int, int]) -> float:
+    """Escala de la interfaz para que se vea como en una pantalla de 'resolucion' píxeles.
+    None (automática) -> 1: tal cual la pantalla y el escalado del sistema."""
+    if not resolucion or pantalla[0] <= 0 or pantalla[1] <= 0:
+        return 1.0
+    e = min(pantalla[0] / resolucion[0], pantalla[1] / resolucion[1])
+    return round(min(max(e, ESCALA_MIN), ESCALA_MAX), 3)
+
+
 def cargar_preferencias() -> dict:
-    """{"placa": "F767", "preguntar": True, "zoom": 1.0}"""
-    pref = {"placa": PLACA_POR_DEFECTO, "preguntar": True, "zoom": 1.0}
+    """{"placa": "F767", "preguntar": True, "resolucion": "auto" | "1920x1080"}"""
+    pref = {"placa": PLACA_POR_DEFECTO, "preguntar": True, "resolucion": RESOLUCION_AUTO}
     try:
         d = json.loads(ruta_preferencias().read_text(encoding="utf-8"))
         if isinstance(d, dict):
             if d.get("placa") in PLACAS:
                 pref["placa"] = d["placa"]
             pref["preguntar"] = bool(d.get("preguntar", True))
-            z = d.get("zoom", 1.0)
-            if isinstance(z, (int, float)) and 0.5 <= z <= 3:
-                pref["zoom"] = float(z)
+            res = leer_resolucion(d.get("resolucion"))
+            if res:
+                pref["resolucion"] = f"{res[0]}x{res[1]}"
     except (OSError, ValueError, TypeError):
         pass
     return pref
 
 
-def zoom_guardado() -> float:
-    return cargar_preferencias()["zoom"]
+def resolucion_guardada() -> tuple[int, int] | None:
+    """None = automática (la de la pantalla)."""
+    return leer_resolucion(cargar_preferencias()["resolucion"])
 
 
-def guardar_zoom(zoom: float):
+def guardar_resolucion(res: tuple[int, int] | None):
     pref = cargar_preferencias()
-    pref["zoom"] = round(float(zoom), 2)
+    pref["resolucion"] = f"{res[0]}x{res[1]}" if res else RESOLUCION_AUTO
     guardar_preferencias(pref)
 
 

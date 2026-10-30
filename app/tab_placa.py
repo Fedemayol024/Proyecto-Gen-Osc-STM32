@@ -482,7 +482,8 @@ class TabPlaca(QWidget):
         # izquierda: capacidades y límites
         sc = QScrollArea()
         sc.setWidgetResizable(True)
-        W.tam(sc, "setFixedWidth", 560)
+        W.tam(sc, "setMinimumWidth", 340)       # se achica en pantallas angostas
+        W.tam(sc, "setMaximumWidth", 560)
         sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         cont = QWidget()
         lay = QVBoxLayout(cont)
@@ -540,7 +541,10 @@ class TabPlaca(QWidget):
         fila.addStretch(1)
         pl.addLayout(fila)
         self.dib_con = DibujoConexiones()
-        pl.addWidget(self.dib_con, 1)
+        sc_con = QScrollArea()                     # en pantallas chicas, se desplaza en vez
+        sc_con.setWidgetResizable(True)            # de agrandar la ventana
+        sc_con.setWidget(self.dib_con)
+        pl.addWidget(sc_con, 1)
         self.combo.currentTextChanged.connect(self.dib_con.set_esquema)
         self.sub.addTab(pag, "Conexiones")
 

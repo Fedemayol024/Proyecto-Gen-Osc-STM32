@@ -230,24 +230,93 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         self.assertGreater(float(np.max(y)), -10)                  # el fundamental sigue ahí
         self.assertEqual(self.osc.estado_config()["fft"]["ruido"], 2)
 
-    # --------------------------------------------------------------- zoom
-    def test_zoom_agranda_y_vuelve(self):
+    # --------------------------------------------------------------- opciones gráficas
+    def test_resolucion_agranda_y_vuelve_a_automatica(self):
         scroll = self.osc.findChild(TO.QScrollArea)
         ancho = scroll.width()
-        self.v.cambiar_zoom(+1)
-        self.v.aplicar_zoom()
-        self.assertAlmostEqual(W.ESCALA, 1.1)
+        self.v.resolucion_pantalla = lambda: (1920, 1080)
+        self.v.elegir_resolucion((1280, 720))                     # más chica que la pantalla
+        self.assertAlmostEqual(W.ESCALA, 1.5)
         self.assertEqual(scroll.width(), W.px(340))
-        self.assertEqual(self.v.btn_zoom.text(), "110 %")
         self.assertIn(f"{W.pt(10)}pt", _app.styleSheet())
-        self.assertEqual(M.zoom_guardado(), 1.1)
-        self.v.cambiar_zoom(+1)
-        self.v.cambiar_zoom(+1)                                   # dos pasos seguidos: 125 % → 140 %
-        self.assertEqual(self.v.btn_zoom.text(), "140 %")
-        self.v.cambiar_zoom(0)
-        self.v.aplicar_zoom()
+        self.assertEqual(M.resolucion_guardada(), (1280, 720))
+        self.v.elegir_resolucion(None)                            # automática
+        self.assertEqual(W.ESCALA, 1.0)
         self.assertEqual(scroll.width(), ancho)
-        self.assertEqual(M.zoom_guardado(), 1.0)
+        self.assertIsNone(M.resolucion_guardada())
+
+    def test_menu_de_opciones_graficas(self):
+        self.v.resolucion_pantalla = lambda: (1920, 1080)
+        self.v._armar_menu_opciones()
+        textos = [a.text() for a in self.v.menu_opciones.actions() if a.text()]
+        self.assertTrue(textos[1].startswith("Automática · la de la pantalla (1920×1080)"))
+        marcadas = [a.text() for a in self.v.menu_opciones.actions() if a.isChecked()]
+        self.assertEqual(len(marcadas), 1)
+        self.assertTrue(marcadas[0].startswith("Automática"))      # por defecto: la del sistema
+        self.assertTrue(any(t.startswith("1366×768") and "más grande" in t for t in textos))
+        self.assertTrue(any(t.startswith("1920×1080") and "igual a la pantalla" in t for t in textos))
+        self.assertTrue(any(t.startswith("3840×2160") and "entra más" in t for t in textos))
+
+    def test_la_ventana_entra_en_una_notebook(self):
+        self.v.lbl_con.setText("● Conectado · COM7 · NUCLEO-F767ZI · firmware v0.8.19 · generador "
+                               "1 MS/s · osciloscopio hasta 1,59 MS/s")      # texto largo
+        minimo = self.v.minimumSizeHint()
+        self.assertLessEqual(minimo.width(), 1280)
+        self.assertLessEqual(minimo.height(), 680)
+
+    # --------------------------------------------------------------- Single / Autoset
+    def _conectado(self):
+        enviados = []
+        self.v.disp.enviar = lambda t: enviados.append(t) or True
+        p = mock.patch.object(type(self.v.disp), "esta_conectado", new_callable=mock.PropertyMock,
+                              return_value=True)
+        p.start()
+        self.addCleanup(p.stop)
+        self.v.disp.info = {"osc_fsmax": 1.59e6}
+        return enviados
+
+    def _llega(self, enviados):
+        """La placa contesta la última CAP enviada con un cuadro de ese tamaño."""
+        cap = [e for e in enviados if e.startswith("CAP ")][-1].split()
+        n, pre, fs = int(cap[1]), int(cap[2]), float(cap[3])
+        t = np.arange(n) / fs
+        ch = np.rint(2048 + 1000 * np.sin(2 * np.pi * 1000 * t)).astype(np.uint16)
+        self.v._al_datos({"n": n, "pre": pre, "fs": fs, "disparado": 1, "ch1": ch, "ch2": ch})
+
+    def test_single_y_autoset_no_encimar_capturas(self):
+        """Con una captura en camino, Single/Autoset no mandan otra CAP (el firmware viejo
+        abortaba la captura a la mitad y el ADC quedaba trabado hasta reconectar)."""
+        enviados = self._conectado()
+        self.osc._alternar_run()                                   # RUN: una captura en camino
+        self.assertEqual(sum(e.startswith("CAP ") for e in enviados), 1)
+        for boton in (self.osc._unico, self.osc._autoset):
+            self.assertTrue(self.osc.esperando)
+            antes = sum(e.startswith("CAP ") for e in enviados)
+            boton()
+            self.assertEqual(sum(e.startswith("CAP ") for e in enviados), antes)   # nada encimado
+            self._llega(enviados)                                  # llega la de antes del botón…
+            self.assertEqual(sum(e.startswith("CAP ") for e in enviados), antes + 1)  # …y recién ahí
+            self._llega(enviados)
+            if boton == self.osc._unico:
+                self.assertFalse(self.osc.corriendo)               # Single terminó
+                self.assertIn("Single", self.v.statusBar().currentMessage())
+                self.osc._alternar_run()
+            else:
+                while self.osc.autoset_estado:
+                    self._llega(enviados)
+                self.assertIn("Autoset listo", self.v.statusBar().currentMessage())
+                self.assertTrue(self.osc.corriendo)               # sigue adquiriendo
+
+    def test_stop_cancela_un_single_pendiente(self):
+        enviados = self._conectado()
+        self.osc._alternar_run()
+        self.osc._unico()
+        self.osc._alternar_run()                                   # STOP
+        self.assertIsNone(self.osc.accion_pendiente)
+        self.assertFalse(self.osc.corriendo)
+        antes = len(enviados)
+        self._llega(enviados)
+        self.assertEqual(len(enviados), antes)                     # no pide más
 
     # --------------------------------------------------------------- reconexión / watchdog
     def test_reconexion_automatica_tras_un_reinicio(self):

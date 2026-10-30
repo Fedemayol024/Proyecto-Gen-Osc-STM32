@@ -142,7 +142,7 @@ Para crear el `.exe`, hacé doble clic en `app/build_exe.bat`. Necesita Python 3
 6. **Calibración** (una vez):
    - **Salidas:** con multímetro, dos puntos por canal.
    - **Entradas:** automática, conectando OUT1→IN1 y OUT2→IN2. También hay un "cero" con las entradas a GND.
-7. **Tamaño de la interfaz:** botones **A− / A+** arriba a la derecha (o **Ctrl +**, **Ctrl −**, **Ctrl 0**, o **Ctrl + rueda del mouse**). Agranda o achica todo, de 80 % a 200 %, y se recuerda para la próxima vez.
+7. **Opciones gráficas (⚙, arriba a la derecha):** resolución de la interfaz. Por defecto es **Automática**, la misma de la pantalla. Funciona como en los juegos: con una resolución más chica (por ejemplo 1280×720 en una pantalla de 1920×1080) todo se ve más grande, y con una más grande entra más en pantalla. La elección se recuerda. «Ajustar la ventana a la pantalla» la acomoda si quedó fuera de lugar.
 8. **Placa:** capacidades y límites de la placa elegida (con los valores medidos en vivo al conectar), un dibujo de la placa con la ubicación de cada pin que usa el instrumento y diagramas de conexión para los usos típicos (prueba rápida, Bode, señal externa, frecuencímetro y PWM).
 
 Las calibraciones y los ajustes se guardan en `%APPDATA%\InstrumentoF767\`: `config.json` para la F767ZI y `config_F429.json` para la F429ZI. La placa elegida se guarda en `preferencias.json`.

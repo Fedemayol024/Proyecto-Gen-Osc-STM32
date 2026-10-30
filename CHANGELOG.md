@@ -19,6 +19,25 @@ La app (`VERSION` en `app/main.py`) y el firmware (`INSTR_VERSION` en `instrumen
 
 _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan a una sección con número y fecha._
 
+### Corregido
+- **El trazo se congelaba al tocar Single o Autoset** (en las dos placas) y solo volvía reconectando la placa. Esos dos botones pedían una captura nueva mientras la anterior todavía estaba en curso, y el firmware la cortaba a la mitad: el ADC dual quedaba en *overrun* y no volvía a entregar datos. Ahora:
+  - la app espera a que llegue la captura en camino antes de arrancar el Single o el Autoset (como ya hacía RUN);
+  - el firmware, al cortar una captura, reinicia bien el ADC y el DMA;
+  - si una captura tarda bastante más de lo que debería, el firmware la vuelve a armar sola en lugar de quedarse esperando. `STAT?` informa cuántas veces pasó (`osc_rein=`).
+- **En notebooks la ventana no entraba en la pantalla.** Al 100 % necesitaba 1378 px de ancho, por la pestaña Placa y por el texto de conexión de la barra de arriba. Ahora necesita unos 880 px: la pestaña Placa se acomoda y desplaza, y el texto de conexión se recorta con «…» (completo en el tooltip). Al abrir, la ventana se ajusta a la pantalla.
+
+### Mejorado
+- **Opciones gráficas (⚙)** en lugar de los botones A− / 100 % / A+: menú con la resolución de la interfaz (1280×720 a 3840×2160). Por defecto es **Automática**, la misma de la pantalla. Una resolución más chica agranda todo y una más grande hace entrar más, como en los juegos.
+- La app ya no pasa todos los eventos de la ventana por Python para el atajo Ctrl + rueda (que se quitó): se aliviana el dibujo.
+- Single avisa «esperando el disparo… (tocá STOP para cancelar)» y «captura lista».
+
+### Firmware
+- `osciloscopio.c`: `osc_abortar()` corta los pedidos de DMA del ADC, vacía los datos, borra los flags y reinicia ADC1/ADC2. Nuevo `osc_vigilar()` (en el lazo principal) para rearmar capturas trabadas. Mismo código en las dos placas. **Hay que recompilar y cargar el firmware** en la F767ZI y en la F429ZI (para la F429 copiar `osciloscopio.c/.h` e `instrumento.c`).
+
+### Pendiente de probar
+- Single y Autoset con la placa real, con el firmware viejo (ya no debería congelarse, por el arreglo de la app) y con el nuevo.
+- Opciones gráficas en la notebook del compañero y en una pantalla con el escalado de Windows al 125 % / 150 %.
+
 ---
 
 ## [0.8.19 beta] · 2026-10-29 · La F429ZI vuelve a conectar
