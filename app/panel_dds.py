@@ -59,6 +59,10 @@ def _fmt(v: float | None, dec: int = 3) -> str:
     return "" if v is None else f"{v:.{dec}f}".rstrip("0").rstrip(".").replace(".", ",")
 
 
+def _grados(g: float) -> str:
+    return f"{g:.1f}°".replace(".", ",")
+
+
 def _fmt_v(v: float | None, cifras: int = 4) -> str:
     if v is None:
         return "—"
@@ -424,17 +428,24 @@ class PanelDDS(QWidget):
         self.fase = W.EntradaSI("°", 0, 360, self.c.fase, 5)
         self.amp = W.EntradaSI("%", 0, 100, self.c.amplitud, 4)
         self.vpp = W.EntradaSI("V", 0, 20, 0.0, 4)
+        self.fase.setToolTip("Pasos de 0,088°. Con una sola salida no se nota (la fase es relativa "
+                             "a algo): sirve en PSK y para la fase con que arranca cada ráfaga.")
         lay.addWidget(W.fila("Forma", self.forma,
                              ayuda="Cuadrada f/2: la cuadrada del AD9833 a la mitad de la frecuencia."))
         lay.addWidget(W.fila("Frecuencia", self.frec))
         lay.addWidget(W.fila("Período", self.periodo))
-        lay.addWidget(W.fila("Fase", self.fase, ayuda="Pasos de 0,088°. Sirve para FSK/PSK y "
-                                                      "para alinear con otro generador."))
-        lay.addWidget(W.fila("Amplitud", self.amp,
-                             ayuda="Posición del potenciómetro digital (MCP41010) que fija la "
-                                   "ganancia de la salida amplificada (PGA)."))
+        # La fase solo se ve en PSK y en ráfagas: ahí aparece (ver _mostrar)
+        self.fila_fase = W.fila("Fase", self.fase)
+        lay.addWidget(self.fila_fase)
+        # Amplitud: en % del potenciómetro mientras no hay calibración; después, en Vpp
+        self.fila_amp = W.fila("Amplitud", self.amp,
+                               ayuda="Posición del potenciómetro digital (MCP41010) que fija la "
+                                     "ganancia de la salida amplificada (PGA). Calibrando, se "
+                                     "elige directamente en Vpp.")
+        lay.addWidget(self.fila_amp)
         self.fila_vpp = W.fila("Amplitud (Vpp en PGA)", self.vpp,
-                               ayuda="Disponible después de calibrar la amplitud.")
+                               ayuda="Según la calibración, de 0 V al Vpp medido a 100 %. El "
+                                     "potenciómetro tiene 256 pasos: queda en el más cercano.")
         lay.addWidget(self.fila_vpp)
         self.lbl_info = W.etiqueta_tenue("")
         self.lbl_info.setWordWrap(True)
@@ -539,7 +550,7 @@ class PanelDDS(QWidget):
         self.tab.programar_envio_dds()
 
     def _vpp_editado(self, vpp: float):
-        pct = M.dds_porcentaje_para_vpp(self.c.cal, vpp)
+        pct = M.dds_porcentaje_para_vpp(M.dds_cal_selector(self.c.cal), vpp)
         if pct is None:
             return
         self.amp.set_valor(pct)
@@ -556,11 +567,22 @@ class PanelDDS(QWidget):
             for f in filas:
                 f.setVisible(c.modulacion == nombre)
 
-        # amplitud en volts (si está calibrada)
-        vpp = M.dds_vpp(c.cal, c.amplitud)
-        vmed = M.dds_vmedia(c.cal, c.amplitud)
-        self.fila_vpp.setEnabled(vpp is not None)
+        # fase: solo donde se nota
+        self.fila_fase.setVisible(c.modulacion in ("PSK", "Ráfaga"))
+        self.fila_fase.layout().itemAt(0).widget().setText(
+            "Fase 1" if c.modulacion == "PSK" else "Fase de arranque")
+
+        # amplitud: con calibración se elige en Vpp (0 % = 0 V); sin ella, en %
+        sel = M.dds_cal_selector(c.cal)
+        pct_q = M.dds_porcentaje_cuantizado(c.amplitud)
+        vpp = M.dds_vpp(sel, pct_q)
+        vmed = M.dds_vmedia(c.cal, pct_q)
+        calibrada = vpp is not None
+        self.fila_amp.setVisible(not calibrada)
+        self.fila_vpp.setVisible(calibrada)
         self.vpp.blockSignals(True)
+        if calibrada:
+            self.vpp.set_rango(0.0, max(M.dds_vpp(sel, 100.0) or 0.0, 1e-3))
         self.vpp.set_valor(vpp or 0.0)
         self.vpp.blockSignals(False)
 
@@ -578,7 +600,7 @@ class PanelDDS(QWidget):
         f = self.frec_real if confirmada else esperada
         quien = "confirmada por la placa" if confirmada else "que va a salir"
         lineas = [f"Frecuencia {quien}: {M.si(f, 'Hz', 9)} · potenciómetro "
-                  f"{M.dds_paso_amplitud(c.amplitud)}/255"]
+                  f"{M.dds_paso_amplitud(c.amplitud)}/255 ({pct_q:.1f} %)".replace(".", ",")]
         if vpp is not None:
             t = f"≈ {M.si(vpp, 'V', 3)}pp"
             if vmed is not None:
@@ -586,7 +608,8 @@ class PanelDDS(QWidget):
                      f"{M.si(vmed + vpp / 2, 'V', 3)})"
                 if vmed + vpp / 2 > 3.3 or vmed - vpp / 2 < 0:
                     avisos.append("⚠ Así no entra en los pines directos (0 a 3,3 V): usá la etapa de entrada.")
-            lineas.append(f"Salida PGA {t} · calibrada con {len(c.cal)} punto(s)")
+            lineas.append(f"Salida PGA {t} · calibrada con {len(c.cal)} punto(s), de 0 a "
+                          f"{M.si(M.dds_vpp(sel, 100.0), 'V', 3)}pp")
         else:
             lineas.append("Amplitud sin calibrar (tocá «Calibrar amplitud…» para verla en volts)")
         ppm = (c.mclk / M.DDS_MCLK - 1) * 1e6
@@ -609,12 +632,15 @@ class PanelDDS(QWidget):
             return (f"Alterna {M.si(c.frecuencia, 'Hz', 6)} y {M.si(c.fsk_f2, 'Hz', 6)}, cada "
                     f"{M.si(1 / c.fsk_tasa, 's', 3)}. Hasta {int(M.DDS_TASA_MAX)} símbolos/s.")
         if m == "PSK":
-            return (f"Alterna la fase entre {c.fase:.1f}° y {c.psk_fase2:.1f}°, cada "
-                    f"{M.si(1 / c.psk_tasa, 's', 3)}. Hasta {int(M.DDS_TASA_MAX)} símbolos/s.")
+            return (f"Alterna la fase entre {_grados(c.fase)} y {_grados(c.psk_fase2)}, cada "
+                    f"{M.si(1 / c.psk_tasa, 's', 3)}. Hasta {int(M.DDS_TASA_MAX)} símbolos/s. "
+                    "Para verlo, dispará el osciloscopio con la señal de datos o usá una base de "
+                    "tiempo que muestre varios símbolos.")
         if m == "Ráfaga":
             dur = c.raf_ciclos / max(c.frecuencia, 1e-9)
             t = (f"{int(c.raf_ciclos)} ciclos ({M.si(dur, 's', 3)}) cada {M.si(c.raf_periodo, 's', 3)}; "
-                 "cada ráfaga arranca en fase 0. Los tiempos tienen ~20 µs de incertidumbre.")
+                 f"cada ráfaga arranca en {_grados(c.fase)} (la «fase de arranque»). Los tiempos tienen "
+                 "~20 µs de incertidumbre.")
             if dur >= c.raf_periodo:
                 t = f"<span style='color:{W.ALERTA}'>⚠ La ráfaga dura más que el período: sale continua.</span> " + t
             return t

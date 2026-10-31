@@ -434,18 +434,40 @@ class TestPestanaOsciloscopio(unittest.TestCase):
 
     def test_ad9833_amplitud_en_volts_con_calibracion(self):
         d = self.v.tab_gen.dds
-        self.assertFalse(d.fila_vpp.isEnabled())                 # sin calibrar
-        d.c.cal = [[0.0, 0.0, 2.0], [100.0, 1.85, 2.0]]
+        d.show()
+        self.assertTrue(d.fila_amp.isVisibleTo(d))              # sin calibrar: en %
+        self.assertFalse(d.fila_vpp.isVisibleTo(d))
+        # calibrada: el 0 % midió 12 mV de resto, pero el selector arranca en 0 V
+        d.c.cal = [[0.0, 0.012, 2.0], [100.0, 1.85, 2.0]]
         d._mostrar()
-        self.assertTrue(d.fila_vpp.isEnabled())
-        self.assertAlmostEqual(d.vpp.valor(), 0.925, places=3)   # 50 %
+        self.assertFalse(d.fila_amp.isVisibleTo(d))             # ahora se elige en Vpp
+        self.assertTrue(d.fila_vpp.isVisibleTo(d))
+        self.assertEqual((d.vpp.vmin, d.vpp.vmax), (0.0, 1.85))  # de 0 V a lo medido a 100 %
+        self.assertAlmostEqual(d.vpp.valor(), 1.85 * 128 / 255, places=3)   # 50 % → paso 128
         self.assertIn("de continua", d.lbl_info.text())
-        d.vpp.set_valor(1.48)
-        d._vpp_editado(1.48)                                      # escribir Vpp mueve el %
+        d._vpp_editado(1.48)                                     # escribir Vpp mueve el potenciómetro
         self.assertAlmostEqual(d.amp.valor(), 80.0, places=1)
+        self.assertEqual(M.dds_paso_amplitud(d.c.amplitud), 204)
+        d._vpp_editado(0.0)
+        self.assertEqual(M.dds_paso_amplitud(d.c.amplitud), 0)   # 0 V → 0 % (no el resto medido)
+        self.assertEqual(d.c.cal[0], [0.0, 0.012, 2.0])          # la tabla conserva lo medido
         d.c.cal = [[0.0, 0.0, 2.6], [100.0, 1.85, 2.6]]          # se pasaría de 3,3 V
-        d._mostrar()
+        d.amp.set_valor(100)
+        d._cambio()
         self.assertIn("pines directos", d.lbl_info.text())
+
+    def test_ad9833_fase_solo_en_psk_y_rafaga(self):
+        d = self.v.tab_gen.dds
+        d.show()
+        self.assertFalse(d.fila_fase.isVisibleTo(d))            # sola no se nota
+        d.mod.setCurrentText("PSK")
+        self.assertTrue(d.fila_fase.isVisibleTo(d))
+        self.assertEqual(d.fila_fase.layout().itemAt(0).widget().text(), "Fase 1")
+        d.mod.setCurrentText("Ráfaga")
+        self.assertEqual(d.fila_fase.layout().itemAt(0).widget().text(), "Fase de arranque")
+        d.fase.set_valor(90)
+        d._cambio()
+        self.assertIn("arranca en 90,0°", d.lbl_mod.text())
 
     def test_ad9833_lee_tensiones_como_las_muestra_el_osciloscopio(self):
         from panel_dds import leer_tension

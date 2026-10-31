@@ -794,6 +794,21 @@ def dds_paso_amplitud(porcentaje: float) -> int:
     return int(round(min(max(porcentaje, 0.0), 100.0) / 100 * 255))
 
 
+def dds_cal_selector(cal: list) -> list:
+    """Calibración para el selector de Vpp: el 0 % se toma siempre como 0 V (lo que se mide
+    ahí es ruido o un resto de señal), así el selector arranca en 0. La tabla guardada
+    conserva lo medido."""
+    if not cal:
+        return []
+    salida = [list(p) for p in cal if p[0] > 0]
+    return [[0.0, 0.0, cal[0][2] if cal[0][0] == 0 else None]] + salida
+
+
+def dds_porcentaje_cuantizado(porcentaje: float) -> float:
+    """El % que de verdad queda: el potenciómetro tiene 256 pasos."""
+    return dds_paso_amplitud(porcentaje) / 255 * 100
+
+
 def dds_vpp(cal: list, porcentaje: float) -> float | None:
     """Vpp estimado para una amplitud en %, según los puntos medidos (None sin calibrar).
     Con un solo punto se supone proporcional (ganancia ∝ posición del potenciómetro)."""
