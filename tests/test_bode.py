@@ -230,6 +230,23 @@ class TestModeloBode(unittest.TestCase):
         self.assertAlmostEqual(polos[0], (r + rdc) / (2 * np.pi * L), delta=800)     # 37 kHz
         self.assertTrue(any("-19," in d for d in a["detalles"]))                     # DCR
 
+    def test_escalon_con_meseta_y_resonancia_de_protoboard(self):
+        """Lo que midió el usuario: meseta de −19 dB, subida, meseta cerca de −6 dB y otra
+        subida en MHz. Antes el ajuste se quedaba con un modelo simple, descartaba toda la
+        subida y el corte salía corrido; ahora usa orden 3 y mide desde la meseta."""
+        f = np.logspace(1, 7, 241)
+        s = 2j * np.pi * f
+        w = 2 * np.pi * 14e6
+        h = 10 ** (-19.3 / 20) * (1 + s / (2 * np.pi * 6e3)) / (1 + s / (2 * np.pi * 27.6e3)) \
+            * (1 + s / w / 1.2 + (s / w) ** 2)
+        m = M.mejor_modelo_bode(f, self._medir(h))
+        a = M.analizar_modelo_bode(m, f)
+        self.assertGreater(m.usados.mean(), 0.95)           # no tira la subida
+        self.assertLess(m.error_db, 0.1)
+        self.assertIn("Pasaaltos con pérdida", a["tipo"])
+        self.assertAlmostEqual(a["ref_db"], -6.07, delta=0.3)                    # la meseta, no el pico
+        self.assertAlmostEqual(a["f3db"][0], 26.2e3, delta=1.5e3)
+
     def test_rl_pasabajos_con_autorresonancia(self):
         s = 2j * np.pi * self.F
         L, rdc, r = 1.06e-3, 27, 220
@@ -319,6 +336,24 @@ class TestInformeBode(unittest.TestCase):
         ruta = os.path.join(self._tmp.name, "rc.pdf")
         self.assertTrue(self.bode.generar_informe(ruta))
         self.assertGreaterEqual(self._paginas(ruta), 1)
+
+    def test_nombre_de_archivo_desde_el_titulo(self):
+        from tab_bode import nombre_archivo
+        self.assertEqual(nombre_archivo("RC pasabajos "), "RC pasabajos")
+        self.assertEqual(nombre_archivo("RC 4k7/103: ¿corte?"), "RC 4k7 103 ¿corte")
+        self.assertEqual(nombre_archivo("RL · 1 mH + 220 Ω"), "RL · 1 mH + 220 Ω")
+        self.assertEqual(nombre_archivo("  ... "), "")
+
+    def test_barrido_nuevo_borra_titulo_y_notas(self):
+        b = self.bode
+        b._ultimo_titulo, b._ultimas_notas = "RC viejo", "notas viejas"
+        from unittest import mock
+        with mock.patch.object(type(b.v.disp), "esta_conectado", new_callable=mock.PropertyMock,
+                               return_value=True):
+            b._alternar()                                   # arranca un barrido nuevo
+            if b.activo:
+                b._terminar("prueba")
+        self.assertEqual((b._ultimo_titulo, b._ultimas_notas), ("", ""))
 
     def test_carpeta_inexistente_no_rompe(self):
         f = np.logspace(2, 4, 9)

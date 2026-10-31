@@ -451,7 +451,7 @@ def captura_bode_dds(f: float, fs_max: float, ventana: int = 8192) -> tuple[int,
 # iterados) con pesos robustos: los puntos que no encajan (autorresonancias lejanas, acople)
 # pesan poco y no arruinan el ajuste. Se elige el más simple que explique la curva y se
 # describe en palabras: tipo de respuesta, polos, ceros, Q y −3 dB desde la meseta correcta.
-BODE_ORDENES = [(0, 1), (1, 1), (0, 2), (1, 2), (2, 2)]     # (grado numerador, grado denominador)
+BODE_ORDENES = [(0, 1), (1, 1), (0, 2), (1, 2), (2, 2), (2, 1), (3, 2), (2, 3), (3, 3)]     # (grado numerador, grado denominador)
 
 
 @dataclass
@@ -508,8 +508,17 @@ def ajustar_bode(f, H, n, d, iter_sk=12, iter_robusto=6) -> ModeloBode | None:
             num, den = _resolver(x, H, n, d, w)
         hm = np.polyval(num[::-1], x) / np.polyval(den[::-1], x)
         e = np.abs(np.log(hm / H))                 # |Δln| ~ dB/8,7 y fase en rad juntos
-        escala = max(1.5 * np.median(e), 0.02)
+        escala = max(1.5 * np.median(e), 0.06, np.quantile(e, 0.8))
         peso = 1 / (1 + (e / escala) ** 2)         # los puntos que no encajan pesan poco
+    # Un polo muy por encima del rango casi no se nota en la medición: el ruido decide de qué
+    # lado del plano cae. Si cae del lado inestable se lo refleja (mismo módulo en jω, la fase
+    # cambia apenas) en vez de tirar un modelo que ajusta bien.
+    rx = np.roots(den[::-1]) if len(den) > 1 else np.array([])
+    lejos = (rx.real > 0) & (np.abs(rx) * w0 / (2 * np.pi) > 5 * f.max())
+    if lejos.any():
+        rx = np.where(lejos, -np.conj(rx), rx)
+        den = np.real(np.poly(rx)[::-1])
+        den = den / den[0]
     hm = np.polyval(num[::-1], x) / np.polyval(den[::-1], x)
     usados = peso > 0.5
     if usados.sum() < max(4, n + d + 2):
@@ -613,6 +622,23 @@ def analizar_modelo_bode(m: ModeloBode, f) -> dict:
                 out.append(10 ** x)
         return out
 
+    # Mesetas: tramos donde la curva casi no cambia (< 4 dB/década) a lo largo de ≥ 0,25
+    # décadas. Sirven para medir el corte desde la meseta y no desde una subida de más arriba
+    # (autorresonancia, capacidades del protoboard) que el modelo también tiene que seguir.
+    lf = np.log10(fg)
+    plano = np.abs(np.gradient(gc, lf)) < 4
+    mesetas, i = [], 0
+    while i < len(fg):
+        if plano[i]:
+            j = i
+            while j + 1 < len(fg) and plano[j + 1]:
+                j += 1
+            if lf[j] - lf[i] >= 0.25:
+                mesetas.append((fg[i], fg[j], float(np.median(gc[i:j + 1]))))
+            i = j + 1
+        else:
+            i += 1
+
     complejos = [p for p in p_in if p[1] is not None]
     detalles, f3, ref = [], [], None
     if g_pk - max(g_lo, g_hi) > 3 and 0 < k_pk < len(fg) - 1:
@@ -633,8 +659,11 @@ def analizar_modelo_bode(m: ModeloBode, f) -> dict:
             tipo = "Pasaaltos con pérdida en continua (escalón)"
         else:
             tipo = "Pasaaltos de 2º orden" if (complejos or z_bajos >= 2) else "Pasaaltos de 1er orden"
-        ref = g_hi
-        f3 = cruces(g_hi)[-1:]
+        ref, hasta = g_hi, fmax
+        altas = [mz for mz in mesetas if mz[2] > g_lo + 6]
+        if altas:                                   # la primera meseta de arriba de la subida
+            ref, hasta = altas[0][2], altas[0][0]
+        f3 = [x for x in cruces(ref) if x <= hasta * 1.001][-1:] or cruces(ref)[-1:]
     else:
         tipo = "Respuesta casi plana"
     for fr, q in p_in:

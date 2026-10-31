@@ -228,12 +228,17 @@ def grafico_frecuencia(doc: Documento, x, y, w, h, titulo, unidad, f, medida,
         p.setClipping(False)
         doc.texto(ax + aw - 40, yy - 3.6, 40, etiqueta, 6.5, color=C_TENUE, alin=Qt.AlignRight)
         p.setClipRect(doc.r(ax, ay, aw, ah))
-    for fr, etiqueta in verticales:
+    puestas = []                                   # (x, fila) de las etiquetas ya escritas
+    for fr, etiqueta in sorted(verticales, key=lambda v: v[0]):
         if 10 ** lf0 <= fr <= 10 ** lf1:
             xx = px(fr, vmin).x() / MM
             doc.linea(xx, ay, xx, ay + ah, C_ACENTO, 0.3, Qt.DotLine)
             p.setClipping(False)
-            doc.texto(xx + 0.6, ay + 0.5, 12, etiqueta, 6.5, True, C_ACENTO)
+            fila = 0                               # si pisa a otra cercana, baja un renglón
+            while any(abs(xx - x0) < 4 and f0 == fila for x0, f0 in puestas):
+                fila += 1
+            puestas.append((xx, fila))
+            doc.texto(xx + 0.6, ay + 0.5 + 3 * fila, 12, etiqueta, 6.5, True, C_ACENTO)
             p.setClipRect(doc.r(ax, ay, aw, ah))
     # medida: línea fina y puntos (los que el ajuste no usó, en rojo)
     camino = QPainterPath(px(f[0], medida[0]))
@@ -244,19 +249,31 @@ def grafico_frecuencia(doc: Documento, x, y, w, h, titulo, unidad, f, medida,
     p.setPen(QPen(color_l, 0.25 * MM))
     p.setBrush(Qt.NoBrush)
     p.drawPath(camino)
+    # el tamaño del punto sigue a la separación entre puntos: con barridos densos (40 por
+    # década o más) son chicos para que no se peguen; los descartados van como aros rojos,
+    # que dejan ver la línea y el modelo debajo.
+    if len(f) > 1:
+        paso = float(np.median(np.abs(np.diff(np.log10(f))))) / (lf1 - lf0) * aw
+    else:
+        paso = 2.0
+    rr = min(max(0.32 * paso, 0.17), 0.55)
+    malos = np.zeros(len(f), bool) if usados is None else ~np.asarray(usados, bool)
     p.setPen(Qt.NoPen)
-    for i, (fr, v) in enumerate(zip(f, medida)):
-        malo = usados is not None and not usados[i]
-        p.setBrush(QBrush(C_MALO if malo else color))
-        rr = (0.75 if malo else 0.55) * MM
-        p.drawEllipse(px(fr, v), rr, rr)
+    p.setBrush(QBrush(color))
+    for fr, v in zip(f[~malos], medida[~malos]):
+        p.drawEllipse(px(fr, v), rr * MM, rr * MM)
+    p.setPen(QPen(C_MALO, max(0.12, rr * 0.4) * MM))
+    p.setBrush(Qt.NoBrush)
+    ra = rr * 1.25
+    for fr, v in zip(f[malos], medida[malos]):
+        p.drawEllipse(px(fr, v), ra * MM, ra * MM)
     # modelo punteado
     if f_mod is not None and modelo is not None:
         camino = QPainterPath(px(f_mod[0], modelo[0]))
         for fr, v in zip(f_mod[1:], modelo[1:]):
             camino.lineTo(px(fr, v))
         p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(C_MOD, 0.45 * MM, Qt.DashLine))
+        p.setPen(QPen(C_MOD, 0.35 * MM, Qt.DashLine))
         p.drawPath(camino)
     p.setClipping(False)
     # marco y etiquetas de ejes
@@ -278,11 +295,11 @@ def leyenda(doc: Documento, x, y, color):
     p.setBrush(QBrush(color))
     p.drawEllipse(doc.pt(x + 1, y + 1.6), 0.55 * MM, 0.55 * MM)
     doc.texto(x + 3, y, 30, "medición", 7, color=C_TENUE)
-    doc.linea(x + 20, y + 1.6, x + 27, y + 1.6, C_MOD, 0.45, Qt.DashLine)
+    doc.linea(x + 20, y + 1.6, x + 27, y + 1.6, C_MOD, 0.35, Qt.DashLine)
     doc.texto(x + 28.5, y, 35, "modelo ajustado", 7, color=C_TENUE)
-    p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(C_MALO))
-    p.drawEllipse(doc.pt(x + 56, y + 1.6), 0.75 * MM, 0.75 * MM)
+    p.setPen(QPen(C_MALO, 0.22 * MM))
+    p.setBrush(Qt.NoBrush)
+    p.drawEllipse(doc.pt(x + 56, y + 1.6), 0.65 * MM, 0.65 * MM)
     doc.texto(x + 58, y, 70, "punto que el ajuste no usó", 7, color=C_TENUE)
 
 

@@ -22,13 +22,23 @@ import pyqtgraph as pg
 from PySide6.QtCore import QTimer
 import datetime as dt
 
-from PySide6.QtCore import QUrl
+import os
+import re
+
+from PySide6.QtCore import QStandardPaths, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout,
                                QLabel, QLineEdit, QPlainTextEdit, QVBoxLayout, QWidget)
 
 import modelo as M
 import widgets as W
+
+
+def nombre_archivo(titulo: str) -> str:
+    """El título del informe como nombre de archivo válido en Windows (sin \\ / : * ? " < > |)."""
+    t = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", titulo)
+    t = re.sub(r"\s+", " ", t).strip().rstrip(". ")
+    return t[:120]
 
 FUENTE_GEN = "Generador interno (CH1)"
 FUENTE_DDS = "Módulo AD9833"
@@ -222,6 +232,7 @@ class TabBode(QWidget):
                 self.v.estado("Para pasar de ~600 kHz hace falta el firmware nuevo del AD9833.", W.ALERTA)
                 return
         self.meta = self._datos_del_ensayo(f1, f2, ppd, len(self.frecs))
+        self._ultimo_titulo = self._ultimas_notas = ""     # informe nuevo: sin lo del anterior
         self.t_inicio = time.monotonic()
         self.btn_pdf.setEnabled(False)
         self.activo = True
@@ -410,12 +421,17 @@ class TabBode(QWidget):
         if dlg.exec() != QDialog.Accepted:
             return
         self._ultimo_titulo, self._ultimas_notas = e_tit.text(), e_not.toPlainText()
-        nombre = "bode_" + dt.datetime.now().strftime("%Y-%m-%d_%H%M") + ".pdf"
-        ruta, _ = QFileDialog.getSaveFileName(self, "Guardar informe", nombre, "PDF (*.pdf)")
+        nombre = nombre_archivo(self._ultimo_titulo) or \
+            "bode_" + dt.datetime.now().strftime("%Y-%m-%d_%H%M")
+        carpeta = getattr(self, "_carpeta_informes", "") or \
+            QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+        ruta, _ = QFileDialog.getSaveFileName(self, "Guardar informe",
+                                              os.path.join(carpeta, nombre + ".pdf"), "PDF (*.pdf)")
         if not ruta:
             return
         if not ruta.lower().endswith(".pdf"):
             ruta += ".pdf"
+        self._carpeta_informes = os.path.dirname(ruta)
         self.generar_informe(ruta, self._ultimo_titulo, self._ultimas_notas, abrir=True)
 
     def generar_informe(self, ruta: str, titulo: str = "", notas: str = "", abrir: bool = False) -> bool:

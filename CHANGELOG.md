@@ -56,6 +56,14 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
   - La **constelación de polos y ceros** en el plano s (escala logarítmica, con el rango medido sombreado y los mismos números de la tabla) y el **error del ajuste punto por punto**.
   - Un **anexo** con todos los puntos medidos; los que el ajuste dejó de lado salen en rojo.
   - Si el barrido tiene menos de 6 puntos no hay modelo, pero igual sale el informe con los datos y los gráficos.
+  - El archivo se propone con **el mismo nombre que el título** (sacando los caracteres que Windows no acepta) y en la última carpeta que usaste (la primera vez, Documentos).
+  - Al empezar un **barrido nuevo** se borran el título y las notas del informe anterior; si volvés a sacar el informe del mismo barrido, los mantiene.
+  - Con barridos densos (40 puntos por década o más) los **puntos se achican** según la separación para que no se peguen, y los que el ajuste no usó van como **aros rojos** que dejan ver la curva. Las etiquetas de frecuencias muy cercanas ya no se pisan.
+- **Bode: el ajuste ya no descarta la subida en circuitos de protoboard.** Con una resonancia en MHz (capacidades del protoboard, autorresonancia) ningún modelo de orden 2 alcanzaba: la app se quedaba con uno simple, marcaba como «no usados» todos los puntos de la subida y la curva punteada salía corrida. Ahora:
+  - prueba también **modelos de orden 3**;
+  - el ajuste robusto **nunca descarta más del 20 %** de los puntos (los puntos sueltos malos los sigue ignorando);
+  - un polo que cae muy por encima del rango del lado inestable (pasa por el ruido, la medición no lo distingue) se refleja al lado estable en vez de tirar el modelo;
+  - en un pasaaltos, el **corte a −3 dB se mide desde la primera meseta** después de la subida, no desde lo que suba la curva más arriba en MHz.
 
 ### Corregido
 - **El trazo se congelaba al tocar Single o Autoset** (en las dos placas) y solo volvía reconectando la placa. Esos dos botones pedían una captura nueva mientras la anterior todavía estaba en curso, y el firmware la cortaba a la mitad: el ADC dual quedaba en *overrun* y no volvía a entregar datos. Ahora:
