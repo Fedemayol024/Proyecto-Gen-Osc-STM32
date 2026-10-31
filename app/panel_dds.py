@@ -22,10 +22,14 @@ import widgets as W
 
 COLOR = W.OK
 F_MEDICION = 1e6          # frecuencia para medir el reloj (cuadrada, con compuerta de 1 s)
+F_CAL = 1000.0            # seno para calibrar la amplitud
+FS_CAL = 200e3            # muestreo de CH1 en la calibración automática: 200 puntos por período
+N_CAL = 8192              # ~41 períodos
+ESPERA_CAL_MS = 450       # que el módulo cambie y la salida se asiente antes de capturar
 
 
-_PREFIJOS = {"": 1.0, "m": 1e-3, "u": 1e-6, "µ": 1e-6, "k": 1e3}
-_RE_TENSION = re.compile(r"^\s*([-+]?[\d.,]+)\s*([mµuk]?)\s*(v(pp)?)?\s*$", re.IGNORECASE)
+_PREFIJOS = {"": 1.0, "m": 1e-3, "u": 1e-6, "µ": 1e-6, "n": 1e-9, "k": 1e3}
+_RE_TENSION = re.compile(r"^\s*([-+]?[\d.,]+)\s*([mµunk]?)\s*(v(pp)?)?\s*$", re.IGNORECASE)
 
 
 def leer_tension(texto: str) -> float | None:
@@ -58,6 +62,8 @@ def _fmt(v: float | None, dec: int = 3) -> str:
 def _fmt_v(v: float | None, cifras: int = 4) -> str:
     if v is None:
         return "—"
+    if abs(v) < 1e-6:                  # ruido numérico: es cero
+        v = 0.0
     return M.si(v, "V", cifras)
 
 
@@ -79,6 +85,16 @@ class DialogoCalDDS(QDialog):
         self.otros = [p for k, p in previos.items() if k not in {round(x, 3) for x in self.puntos_pct}]
         self.paso = 0
         self._config_previa = M.ConfigDDS.desde_dict(asdict(panel.c))
+        # medición automática con el CH1 de la placa
+        self.auto = False
+        self.osc_corria = False            # para volver a RUN al cerrar
+        self.recortados: list[float] = []
+        self._t_auto = QTimer(self)
+        self._t_auto.setSingleShot(True)
+        self._t_auto.timeout.connect(self._auto_capturar)
+        self._t_vence = QTimer(self)
+        self._t_vence.setSingleShot(True)
+        self._t_vence.timeout.connect(self._auto_sin_datos)
 
         lay = QVBoxLayout(self)
         self.pila = QStackedWidget()
@@ -111,6 +127,13 @@ class DialogoCalDDS(QDialog):
         self.lbl_progreso.setWordWrap(True)
         lm.addWidget(self.lbl_progreso)
         lm.addStretch(1)
+        auto = QHBoxLayout()
+        self.btn_auto = W.boton("Medir automático con CH1", self._alternar_auto)
+        self.btn_auto.setToolTip("Uniendo la salida PGA con A0 (CH1), la app mide sola cada punto "
+                                 "con el osciloscopio de la placa.")
+        auto.addWidget(self.btn_auto)
+        auto.addStretch(1)
+        lm.addLayout(auto)
         self.pila.addWidget(pm)
 
         # ---- página de resumen (editable)
@@ -170,12 +193,17 @@ class DialogoCalDDS(QDialog):
             self.btn_saltar.setVisible(True)
             self.e_vpp.setFocus()
             self.e_vpp.selectAll()
+            if self.auto:
+                self.lbl_lectura.setText("Midiendo con CH1…")
+                self._t_auto.start(ESPERA_CAL_MS)
         else:
+            if self.auto:
+                self._terminar_auto()
             self._armar_resumen()
             self.pila.setCurrentIndex(1)
             self.btn_sig.setText("Guardar")
             self.btn_saltar.setVisible(False)
-        self.btn_ant.setEnabled(paso > 0)
+        self.btn_ant.setEnabled(paso > 0 and not self.auto)
         self._progreso()
         self._validar()
 
@@ -189,6 +217,8 @@ class DialogoCalDDS(QDialog):
     def _validar(self, *_):
         if self.pila.currentIndex() != 0:
             self.btn_sig.setEnabled(True)
+            return
+        if self.auto:
             return
         vpp = leer_tension(self.e_vpp.text())
         txt_med = self.e_vmed.text().strip()
@@ -231,6 +261,93 @@ class DialogoCalDDS(QDialog):
             self._guardar_paso()            # si había algo válido, no se pierde
         self._ir(max(0, self.paso - 1))
 
+    # ------------------------------------------------------------------ automático
+    def _alternar_auto(self):
+        if self.auto:
+            self._terminar_auto()
+            self.panel.tab.v.estado("Medición automática detenida.", W.TENUE)
+            return
+        v = self.panel.tab.v
+        if not v.disp.esta_conectado:
+            v.estado("Conectá la placa primero.", W.ALERTA)
+            return
+        ch1 = v.tab_osc.canales[1]
+        r = QMessageBox.question(
+            self, "Medir automático con CH1",
+            "Uní la salida PGA del módulo con A0 (CH1 de la placa) y las masas.\n\n"
+            f"CH1 está en «{ch1.entrada.currentText()}», punta {ch1.punta.currentText()}. "
+            "Usá acople DC en la etapa de entrada (si la usás): si no, la tensión media no se puede "
+            "medir. Con «Pin directo» la salida tiene que quedar entre 0 y 3,3 V (a 100 % el "
+            "módulo llega a unos 3 V).\n\n"
+            "Mientras mide, el osciloscopio queda en pausa. ¿Empezar?")
+        if r != QMessageBox.Yes:
+            return
+        self.auto = True
+        self.recortados = []
+        self.osc_corria = self.osc_corria or v.tab_osc.corriendo
+        v.tab_osc._set_run(False)
+        v.cancelar_captura()
+        self.btn_auto.setText("Detener medición automática")
+        for w in (self.btn_ant, self.btn_saltar, self.btn_sig, self.e_vpp, self.e_vmed):
+            w.setEnabled(False)
+        self._ir(self.paso)
+
+    def _auto_capturar(self):
+        if not self.auto:
+            return
+        self.panel.tab.v.pedir_captura("dds", N_CAL, 0, FS_CAL)
+        self._t_vence.start(2500)
+
+    def _auto_sin_datos(self):
+        if not self.auto:
+            return
+        self._terminar_auto()
+        self.panel.tab.v.estado("No llegó la captura de CH1: se detuvo la medición automática.", W.ERROR)
+
+    def al_captura(self, d: dict):
+        """Captura de CH1 pedida por la medición automática."""
+        if not self.auto or self.pila.currentIndex() != 0:
+            return
+        self._t_vence.stop()
+        osc = self.panel.tab.v.tab_osc
+        codigos = d["ch1"]
+        v = osc.recta(1).volt(codigos) * osc.canales[1].factor
+        f = M.dds_frecuencia_real(F_CAL, self.panel.c.mclk)
+        vpp, vmed = M.medir_seno(v, d["fs"], f)
+        pct = self.puntos_pct[self.paso]
+        recortada = int(codigos.min()) <= 2 or int(codigos.max()) >= 4093
+        if recortada:
+            self.recortados.append(pct)
+        self.medidas[pct] = [vpp, vmed]
+        self.e_vpp.setText(_fmt_v(vpp, 5))
+        self.e_vmed.setText(_fmt_v(vmed, 5))
+        aviso = f" <span style='color:{W.ALERTA}'>⚠ se recortó en el ADC</span>" if recortada else ""
+        self.lbl_lectura.setText(f"Medido con CH1: {_fmt_v(vpp)}pp sobre {_fmt_v(vmed)}{aviso}")
+        self._progreso()
+        QTimer.singleShot(250, lambda: self._ir(self.paso + 1) if self.auto else None)
+
+    def _terminar_auto(self):
+        self.auto = False
+        self._t_auto.stop()
+        self._t_vence.stop()
+        self.btn_auto.setText("Medir automático con CH1")
+        for w in (self.btn_saltar, self.e_vpp, self.e_vmed):
+            w.setEnabled(True)
+        self.btn_ant.setEnabled(self.paso > 0)
+        self._validar()
+        if self.pila.currentIndex() == 0 or self.paso >= len(self.puntos_pct):
+            v = self.panel.tab.v
+            vpp100 = self.medidas[self.puntos_pct[-1]][0]
+            if self.recortados:
+                v.estado("Medición automática lista, pero se recortó en "
+                         + ", ".join(f"{p:.0f} %" for p in self.recortados)
+                         + ": usá la entrada ±10 V de la placa y repetí.", W.ALERTA)
+            elif vpp100 is not None and vpp100 < 0.01:
+                v.estado("Medición automática lista, pero a 100 % casi no hay señal: ¿está unida "
+                         "la salida PGA con A0?", W.ALERTA)
+            else:
+                v.estado("Medición automática lista: revisá el resumen y guardá.", W.OK)
+
     # ------------------------------------------------------------------ resumen
     def _armar_resumen(self):
         self.tabla.setRowCount(0)
@@ -266,7 +383,13 @@ class DialogoCalDDS(QDialog):
         return M.limpiar_cal_dds(salida)
 
     def done(self, r):
+        if self.auto:
+            self._terminar_auto()
+        self.panel._dlg_cal = None
         self.panel.aplicar_config(self._config_previa, conservar_cal=True)   # vuelve a como estaba
+        osc = self.panel.tab.v.tab_osc
+        if self.osc_corria and not osc.corriendo and self.panel.tab.v.disp.esta_conectado:
+            osc._alternar_run()                                              # y el osciloscopio a RUN
         super().done(r)
 
 
@@ -281,6 +404,7 @@ class PanelDDS(QWidget):
         self.frec_real = None
         self.fase_real = None
         self._midiendo: dict | None = None
+        self._dlg_cal: DialogoCalDDS | None = None
         raiz = QVBoxLayout(self)
         raiz.setContentsMargins(0, 0, 0, 0)
 
@@ -500,8 +624,13 @@ class PanelDDS(QWidget):
         return "Sin modulación."
 
     # ------------------------------------------------------------------ calibración de amplitud
+    def al_captura(self, d: dict):
+        if self._dlg_cal is not None:
+            self._dlg_cal.al_captura(d)
+
     def calibrar_amplitud(self):
         dlg = DialogoCalDDS(self)
+        self._dlg_cal = dlg
         if dlg.exec() != QDialog.Accepted:
             return
         self.c.cal = dlg.puntos()

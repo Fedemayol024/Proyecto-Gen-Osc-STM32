@@ -5,8 +5,9 @@ pseudo-terminal (Linux) para probar la app sin la placa.
 Conexiones simuladas:
   OUT1 -> IN1 y OUT2 -> IN2   (modo "lazo", por defecto)
   OUT1 -> IN1 y OUT1 -> filtro RC (fc = 1 kHz) -> IN2   (modo "bode")
+  salida PGA del AD9833 -> IN1                            (modo "dds")
 Las salidas usan la etapa "Placa ±5 V" y las entradas el rango ±10 V.
-Uso: python nucleo_simulado.py [lazo|bode] [registro.txt]
+Uso: python nucleo_simulado.py [lazo|bode|dds] [registro.txt]
 """
 import math
 import os
@@ -86,6 +87,23 @@ def rc(v: np.ndarray, fs: float, fc=1000.0) -> np.ndarray:
     return y
 
 
+def salida_dds(t: np.ndarray) -> np.ndarray:
+    """Salida PGA del módulo: ~2 V de continua y una ganancia casi lineal con el potenciómetro."""
+    if not dds["hab"]:
+        return np.full(len(t), 2.0) + rng.normal(0, 0.002, len(t))
+    vpp = 1.85 * (dds["amp"] / 255) ** 1.05
+    vmed = 2.0 + 0.03 * dds["amp"] / 255
+    f = dds["f"] * DDS_MCLK_REAL / dds["mclk"]
+    ph = 2 * np.pi * f * t + math.radians(dds["fase"])
+    if dds["forma"] == 0:
+        onda = np.sin(ph)
+    elif dds["forma"] == 1:
+        onda = 2 / np.pi * np.arcsin(np.sin(ph))
+    else:
+        onda = np.sign(np.sin(ph))
+    return vmed + vpp / 2 * onda + rng.normal(0, 0.002, len(t))
+
+
 def capturar(n, pre, fs, fuente, nivel, flanco, hist):
     fs = min(fs, FSMAX)
     psc = max(1, math.ceil(TCLK2 / fs / 65536))
@@ -97,7 +115,7 @@ def capturar(n, pre, fs, fuente, nivel, flanco, hist):
         calent = int(min(200000, 8 * fs / (2 * math.pi * 1000.0))) + 10
     t0 = rng.uniform(0, 10)
     t = t0 + (np.arange(total + calent) - calent) / fs
-    v1 = vout(gen[1], t)
+    v1 = vout(gen[1], t) if MODO != "dds" else salida_dds(t)
     v2 = rc(v1, fs) if MODO == "bode" else vout(gen[2], t)
     c1, c2 = adc(v1[calent:]), adc(v2[calent:])
     disp = 2 if fuente == 0 else 0

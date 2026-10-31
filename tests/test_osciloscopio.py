@@ -495,6 +495,71 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         self.assertEqual((d.c.frecuencia, d.c.modulacion), (5e6, "FSK"))
         self.assertEqual(d.c.cal, [[80.0, 1.48, 2.02]])      # cancelado: no cambia la calibración
 
+    def test_ad9833_calibracion_automatica_con_ch1(self):
+        from PySide6.QtTest import QTest
+        from panel_dds import DialogoCalDDS
+        enviados = self._dds_conectado({"dds_mclk": 25e6, "dds_mod": 1})
+        osc = self.v.tab_osc
+        osc.canales[1].entrada.setCurrentText(M.MODOS_ENTRADA["DIRECTO"].nombre)
+        osc.canales[1].punta.setCurrentText("×1")
+        pedidos = []
+        self.v.pedir_captura = lambda dueno, n, pre, fs, *a: pedidos.append((dueno, n, fs))
+        d = self.v.tab_gen.dds
+        modulo = {0: (0.0, 2.0), 25: (0.46, 2.01), 50: (0.92, 2.02), 75: (1.38, 2.02), 100: (1.84, 2.03)}
+
+        def captura(pct):
+            vpp, vmed = modulo[pct]
+            t = np.arange(8192) / 200e3
+            volts = vmed + vpp / 2 * np.sin(2 * np.pi * 999.961 * t)
+            cod = np.clip(np.rint(osc.recta(1).codigo(volts)), 0, 4095).astype(np.uint16)
+            return {"n": 8192, "pre": 0, "fs": 200e3, "disparado": 2, "ch1": cod, "ch2": cod}
+
+        dlg = DialogoCalDDS(d)
+        d._dlg_cal = dlg
+        with mock.patch("panel_dds.QMessageBox.question", return_value=panel_dds.QMessageBox.Yes):
+            dlg._alternar_auto()
+        self.assertTrue(dlg.auto)
+        self.assertFalse(osc.corriendo)                      # el osciloscopio queda en pausa
+        self.assertIn("CAPX", enviados)
+        for pct in (0, 25, 50, 75, 100):
+            self.assertEqual(d.c.amplitud, float(pct))       # la app puso la salida
+            QTest.qWait(500)                                 # espera a que se asiente y captura
+            self.assertEqual(pedidos[-1], ("dds", 8192, 200e3))
+            self.v._al_datos  # (la captura llega por main._al_datos con dueño "dds")
+            d.al_captura(captura(pct))
+            QTest.qWait(300)
+        self.assertFalse(dlg.auto)
+        self.assertEqual(dlg.pila.currentIndex(), 1)         # resumen
+        pts = dlg.puntos()
+        self.assertEqual([p[0] for p in pts], [0.0, 25.0, 50.0, 75.0, 100.0])
+        for p in pts:
+            vpp, vmed = modulo[int(p[0])]
+            self.assertAlmostEqual(p[1], vpp, delta=0.01)    # cuantización del ADC
+            self.assertAlmostEqual(p[2], vmed, delta=0.005)
+        self.assertIn("lista", self.v.statusBar().currentMessage())
+        osc.corriendo = False
+        dlg.osc_corria = True
+        dlg.reject()
+        self.assertTrue(osc.corriendo)                       # el osciloscopio vuelve a RUN
+
+    def test_ad9833_calibracion_automatica_avisa_si_recorta(self):
+        from PySide6.QtTest import QTest
+        from panel_dds import DialogoCalDDS
+        self._dds_conectado({"dds_mclk": 25e6, "dds_mod": 1})
+        self.v.pedir_captura = lambda *a: None
+        d = self.v.tab_gen.dds
+        dlg = DialogoCalDDS(d)
+        d._dlg_cal = dlg
+        with mock.patch("panel_dds.QMessageBox.question", return_value=panel_dds.QMessageBox.Yes):
+            dlg._alternar_auto()
+        saturada = np.r_[np.zeros(4096), np.full(4096, 4095)].astype(np.uint16)
+        for _ in range(5):
+            QTest.qWait(500)
+            d.al_captura({"n": 8192, "pre": 0, "fs": 200e3, "disparado": 2, "ch1": saturada, "ch2": saturada})
+            QTest.qWait(300)
+        self.assertIn("se recortó", self.v.statusBar().currentMessage())
+        dlg.reject()
+
     def test_ad9833_medir_reloj_con_el_frecuencimetro(self):
         enviados = self._dds_conectado({"dds_mclk": 25e6, "dds_mod": 1})
         d = self.v.tab_gen.dds

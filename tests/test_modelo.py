@@ -333,6 +333,16 @@ class TestConfig(unittest.TestCase):
         self.assertAlmostEqual(M.dds_vmedia(cal, 50), 2.0)               # sin el punto sin media
         self.assertAlmostEqual(M.dds_porcentaje_para_vpp(cal, 1.45), 75)
 
+    def test_medir_seno_vpp_y_media(self):
+        fs, f = 200e3, 999.961
+        t = np.arange(8192) / fs
+        rng = np.random.default_rng(3)
+        v = 2.02 + 0.74 * np.sin(2 * np.pi * f * t + 0.3) + rng.normal(0, 0.01, t.size)
+        v[100] += 0.5                                       # un pico suelto no engaña al ajuste
+        vpp, vmed = M.medir_seno(v, fs, f)
+        self.assertAlmostEqual(vpp, 1.48, delta=0.005)
+        self.assertAlmostEqual(vmed, 2.02, delta=0.003)
+
     def test_ad9833_correccion_de_reloj(self):
         # el módulo tiene un cristal de 25,0004 MHz (+16 ppm): a 1 MHz pedido sale 16 Hz de más
         f_sal = M.dds_frecuencia_real(1e6) * 25.0004e6 / 25e6

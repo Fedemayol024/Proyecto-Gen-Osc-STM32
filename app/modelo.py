@@ -831,6 +831,18 @@ def dds_porcentaje_para_vpp(cal: list, vpp: float) -> float | None:
     return float(np.interp(vpp, xs, ys))
 
 
+def medir_seno(v: np.ndarray, fs: float, f: float) -> tuple[float, float]:
+    """Vpp y tensión media de un seno de frecuencia conocida. El Vpp sale de un ajuste
+    senoidal (no se engaña con el ruido ni con picos sueltos) y la media se toma sobre un
+    número entero de períodos."""
+    v = np.asarray(v, dtype=float)
+    por_periodo = fs / f if f > 0 else len(v)
+    n = int(len(v) // por_periodo * por_periodo) if por_periodo < len(v) else len(v)
+    n = max(n, min(len(v), 16))
+    fasor, _ = fasor_seno(v[:n], fs, f)
+    return 2 * abs(fasor), float(np.mean(v[:n]))
+
+
 def dds_mclk_corregido(mclk_actual: float, f_pedida: float, f_medida: float) -> float | None:
     """Reloj real del módulo a partir de una frecuencia pedida y la medida con el
     frecuencímetro. None si la medición no tiene sentido (sin señal o muy lejos)."""

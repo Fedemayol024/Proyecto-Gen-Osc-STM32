@@ -487,6 +487,8 @@ class Ventana(QMainWindow):
             self.tab_bode.al_recibir(d)
         elif dueno == "cal":
             self.tab_cal.al_recibir(d)
+        elif dueno == "dds":
+            self.tab_gen.dds.al_captura(d)
         else:
             self.tab_osc.al_recibir(d)
 
