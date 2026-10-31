@@ -197,3 +197,74 @@ class TestBodeSubmuestreo(unittest.TestCase):
                 self.assertAlmostEqual(a1, 0.9, delta=0.01)
                 self.assertAlmostEqual(20 * math.log10(abs(hm)), 20 * math.log10(abs(h)), delta=0.1)
                 self.assertAlmostEqual(math.degrees(cmath.phase(hm / h)), 0, delta=1.0)
+
+
+class TestModeloBode(unittest.TestCase):
+    """Ajuste de polos y ceros a la curva medida y descripción de la respuesta."""
+
+    F = np.logspace(1, math.log10(5e6), 230)
+
+    def _medir(self, h, semilla=1):
+        rng = np.random.default_rng(semilla)
+        return h * np.exp(rng.normal(0, 0.003, len(h)) + 1j * np.radians(rng.normal(0, 0.3, len(h))))
+
+    def _analizar(self, h):
+        m = M.mejor_modelo_bode(self.F, self._medir(h))
+        self.assertIsNotNone(m)
+        return m, M.analizar_modelo_bode(m, self.F)
+
+    def test_rc_con_piso_de_acople(self):
+        s = 2j * np.pi * self.F
+        m, a = self._analizar(1 / (1 + s / (2 * np.pi * 3193)) + 10 ** (-55 / 20))
+        self.assertEqual(a["tipo"], "Pasabajos de 1er orden")
+        self.assertAlmostEqual(a["f3db"][0], 3193, delta=30)
+        self.assertIsNotNone(a["piso"])                     # el acople se reconoce como tal
+        self.assertLess(m.error_db, 0.1)
+
+    def test_rl_pasaaltos_con_dcr_y_autorresonancia(self):
+        s = 2j * np.pi * self.F
+        L, rdc, r = 1.06e-3, 27, 220
+        cp = 1 / ((2 * np.pi * 1.8e6) ** 2 * L)
+        zl = (rdc + s * L) / (1 + (rdc + s * L) * s * cp)
+        m, a = self._analizar(zl / (r + zl))
+        self.assertIn("Pasaaltos con pérdida", a["tipo"])
+        ceros = sorted(abs(z) / 2 / np.pi for z in m.ceros)
+        polos = sorted(abs(p) / 2 / np.pi for p in m.polos)
+        self.assertAlmostEqual(ceros[0], rdc / (2 * np.pi * L), delta=100)           # 4,05 kHz
+        self.assertAlmostEqual(polos[0], (r + rdc) / (2 * np.pi * L), delta=800)     # 37 kHz
+        self.assertTrue(any("-19," in d for d in a["detalles"]))                     # DCR
+
+    def test_rl_pasabajos_con_autorresonancia(self):
+        s = 2j * np.pi * self.F
+        L, rdc, r = 1.06e-3, 27, 220
+        cp = 1 / ((2 * np.pi * 1.8e6) ** 2 * L)
+        zl = (rdc + s * L) / (1 + (rdc + s * L) * s * cp)
+        _, a = self._analizar(r / (r + zl))
+        self.assertEqual(a["tipo"], "Pasabajos de 1er orden")
+        self.assertTrue(any("autorresonancia en 1,8 MHz" in d for d in a["detalles"]))
+
+    def test_rlc_pasabanda(self):
+        s = 2j * np.pi * self.F
+        w0, q = 2 * np.pi * 10e3, 5
+        m, a = self._analizar((s * w0 / q) / (s ** 2 + s * w0 / q + w0 ** 2))
+        self.assertEqual(a["tipo"], "Pasabanda / resonancia")
+        self.assertAlmostEqual(a["f3db"][0], 9050, delta=100)
+        self.assertAlmostEqual(a["f3db"][1], 11050, delta=100)
+        self.assertTrue(any("Q = 5,0" in d or "Q = 4,9" in d for d in a["detalles"]))
+
+    def test_segundo_orden_con_acople_no_inventa_un_rechazo(self):
+        s = 2j * np.pi * self.F
+        w0 = 2 * np.pi * 20e3
+        _, a = self._analizar(w0 ** 2 / (s ** 2 + s * w0 * math.sqrt(2) + w0 ** 2) + 10 ** (-55 / 20))
+        self.assertEqual(a["tipo"], "Pasabajos de 2º orden")
+        self.assertFalse(any("Rechazo" in d for d in a["detalles"]))
+        self.assertAlmostEqual(a["f3db"][0], 20e3, delta=300)
+
+    def test_ignora_puntos_sueltos(self):
+        s = 2j * np.pi * self.F
+        h = self._medir(1 / (1 + s / (2 * np.pi * 5e3)))
+        h[[50, 120, 200]] *= 3                                  # tres puntos malos
+        m = M.mejor_modelo_bode(self.F, h)
+        a = M.analizar_modelo_bode(m, self.F)
+        self.assertAlmostEqual(a["f3db"][0], 5e3, delta=60)
+        self.assertEqual(int((~m.usados).sum()), 3)

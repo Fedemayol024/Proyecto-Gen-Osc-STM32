@@ -20,7 +20,7 @@ import time
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QFileDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 import modelo as M
 import widgets as W
@@ -61,6 +61,12 @@ class TabBode(QWidget):
                                      symbolBrush=W.CH2, symbolPen=None, antialias=True)
         self.c_fase = self.p_fase.plot(pen=pg.mkPen("#d2a8ff", width=2), symbol="o", symbolSize=5,
                                        symbolBrush="#d2a8ff", symbolPen=None, antialias=True)
+        # curva del modelo ajustado (punteada, encima de la medida)
+        estilo_mod = pg.QtCore.Qt.DashLine
+        self.c_mag_mod = self.p_mag.plot(pen=pg.mkPen("#f0883e", width=2, style=estilo_mod))
+        self.c_fase_mod = self.p_fase.plot(pen=pg.mkPen("#f0883e", width=2, style=estilo_mod))
+        self.modelo = None
+        self.analisis = None
         self.ref_3db = pg.InfiniteLine(angle=0, pen=pg.mkPen(W.TENUE, style=pg.QtCore.Qt.DashLine))
         self.p_mag.addItem(self.ref_3db)
         self.ref_3db.setVisible(False)
@@ -108,7 +114,13 @@ class TabBode(QWidget):
         g, lay = W.grupo("Resultado")
         self.lbl_res = QLabel("—")
         self.lbl_res.setWordWrap(True)
+        self.lbl_res.setTextFormat(pg.QtCore.Qt.RichText)
         lay.addWidget(self.lbl_res)
+        self.chk_modelo = QCheckBox("Mostrar el modelo (punteado)")
+        self.chk_modelo.setChecked(cfg.get("modelo", True))
+        self.chk_modelo.setToolTip("Curva de los polos y ceros ajustados a la medición, en línea punteada naranja.")
+        self.chk_modelo.toggled.connect(self._mostrar_modelo)
+        lay.addWidget(self.chk_modelo)
         panel.addWidget(g)
         panel.addStretch(1)
 
@@ -123,7 +135,8 @@ class TabBode(QWidget):
 
     def estado_config(self) -> dict:
         return {"f1": self.f1.valor(), "f2": self.f2.valor(), "ppd": self.ppd.currentText(),
-                "amp": self.amp.valor(), "fuente": self.fuente.currentText()}
+                "amp": self.amp.valor(), "fuente": self.fuente.currentText(),
+                "modelo": self.chk_modelo.isChecked()}
 
     @property
     def con_dds(self) -> bool:
@@ -183,6 +196,10 @@ class TabBode(QWidget):
         self.resultados = []
         self.c_mag.setData([], [])
         self.c_fase.setData([], [])
+        self.c_mag_mod.setData([], [])
+        self.c_fase_mod.setData([], [])
+        self.modelo = self.analisis = None
+        self.lbl_res.setText("—")
         if self.con_dds:
             gen = self.v.tab_gen
             if not gen.dds_soportado():
@@ -320,7 +337,42 @@ class TabBode(QWidget):
         if len(self.resultados) < 2:
             return
         arr = np.array(self.resultados)
-        f, g = arr[:, 0], arr[:, 1]
+        f, g, fase = arr[:, 0], arr[:, 1], arr[:, 2]
+        self.modelo = self.analisis = None
+        if len(f) >= 6:
+            h = 10 ** (g / 20) * np.exp(1j * np.radians(fase))
+            try:
+                self.modelo = M.mejor_modelo_bode(f, h)
+            except (np.linalg.LinAlgError, ValueError):
+                self.modelo = None
+            if self.modelo is not None:
+                self.analisis = M.analizar_modelo_bode(self.modelo, f)
+        if self.analisis is None:
+            self._resumen_simple(f, g)
+            return
+        a = self.analisis
+        lineas = [f"<b>{a['tipo']}</b>"]
+        if a["f3db"]:
+            ref = "del pico" if "Pasabanda" in a["tipo"] else "de la meseta"
+            lineas.append(f"Frecuencia de corte (−3 dB {ref}): "
+                          + ", ".join(f"<b>{M.si(x, 'Hz', 4)}</b>" for x in a["f3db"]))
+        lineas += a["detalles"]
+        orden = {(0, 1): "1 polo", (1, 1): "1 polo y 1 cero", (0, 2): "2 polos",
+                 (1, 2): "2 polos y 1 cero", (2, 2): "2 polos y 2 ceros"}.get(a["orden"], "")
+        usados = int(self.modelo.usados.sum())
+        lineas.append(f"<span style='color:{W.TENUE}'>Modelo de {orden}: error "
+                      f"{a['error_db']:.2f} dB / {a['error_fase']:.1f}° en {usados} de {len(f)} puntos"
+                      .replace(".", ",") + "</span>")
+        self.lbl_res.setText("<br>".join(lineas))
+        if a["ref_db"] is not None:
+            self.ref_3db.setPos(a["ref_db"] - 3)
+            self.ref_3db.setVisible(True)
+        else:
+            self.ref_3db.setVisible(False)
+        self._mostrar_modelo()
+
+    def _resumen_simple(self, f, g):
+        """Sin modelo (pocos puntos): máximo y cruces de −3 dB respecto del máximo."""
         gmax = g.max()
         txt = [f"Ganancia máxima: {gmax:.2f} dB a {M.si(f[g.argmax()], 'Hz')}".replace(".", ",")]
         corte = []
@@ -333,7 +385,31 @@ class TabBode(QWidget):
             txt.append("Frecuencia de corte (−3 dB): " + ", ".join(M.si(c, "Hz") for c in corte))
         self.ref_3db.setPos(gmax - 3)
         self.ref_3db.setVisible(True)
-        self.lbl_res.setText("\n".join(txt))
+        self.lbl_res.setText("<br>".join(txt))
+
+    def _curva_modelo(self, f: np.ndarray):
+        """Ganancia (dB) y fase (°) del modelo, con la fase llevada a la rama de la medida."""
+        hm = self.modelo.h(f)
+        g = 20 * np.log10(np.maximum(np.abs(hm), 1e-15))
+        fase = np.degrees(np.unwrap(np.angle(hm)))
+        if self.resultados:
+            f0, fase0 = self.resultados[0][0], self.resultados[0][2]
+            d = fase0 - np.degrees(np.angle(self.modelo.h([f0])[0]))
+            fase = fase + 360 * round(d / 360)
+        return g, fase
+
+    def _mostrar_modelo(self, *_):
+        ver = self.chk_modelo.isChecked() and self.modelo is not None and bool(self.resultados)
+        if not ver:
+            self.c_mag_mod.setData([], [])
+            self.c_fase_mod.setData([], [])
+        else:
+            arr = np.array(self.resultados)
+            fg = np.logspace(math.log10(arr[:, 0].min()), math.log10(arr[:, 0].max()), 600)
+            g, fase = self._curva_modelo(fg)
+            self.c_mag_mod.setData(fg, g)
+            self.c_fase_mod.setData(fg, fase)
+        self.v.guardar_config_pronto()
 
     def _exportar(self):
         if not self.resultados:
@@ -344,9 +420,16 @@ class TabBode(QWidget):
         try:
             with open(ruta, "w", newline="", encoding="utf-8") as fh:
                 w = csv.writer(fh, delimiter=";")
-                w.writerow(["frecuencia_Hz", "ganancia_dB", "fase_grados", "vpp_entrada_V", "vpp_salida_V"])
-                for r in self.resultados:
-                    w.writerow([M.num_csv(x) for x in r])
+                cab = ["frecuencia_Hz", "ganancia_dB", "fase_grados", "vpp_entrada_V", "vpp_salida_V"]
+                if self.modelo is not None:
+                    cab += ["modelo_ganancia_dB", "modelo_fase_grados"]
+                    gm, fm = self._curva_modelo(np.array([r[0] for r in self.resultados]))
+                w.writerow(cab)
+                for i, r in enumerate(self.resultados):
+                    fila = list(r)
+                    if self.modelo is not None:
+                        fila += [gm[i], fm[i]]
+                    w.writerow([M.num_csv(x) for x in fila])
         except OSError as e:
             self.v.estado(f"No se pudo guardar {ruta}: {e.strerror or e}", W.ERROR)
             return

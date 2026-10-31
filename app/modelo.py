@@ -445,6 +445,213 @@ def captura_bode_dds(f: float, fs_max: float, ventana: int = 8192) -> tuple[int,
 
 
 # ---------------------------------------------------------------------------
+# Bode: ajuste de un modelo (polos y ceros) a la curva medida
+# ---------------------------------------------------------------------------
+# Se ajusta H(s) = N(s)/D(s) de orden 1 y 2 (Sanathanan–Koerner: mínimos cuadrados lineales
+# iterados) con pesos robustos: los puntos que no encajan (autorresonancias lejanas, acople)
+# pesan poco y no arruinan el ajuste. Se elige el más simple que explique la curva y se
+# describe en palabras: tipo de respuesta, polos, ceros, Q y −3 dB desde la meseta correcta.
+BODE_ORDENES = [(0, 1), (1, 1), (0, 2), (1, 2), (2, 2)]     # (grado numerador, grado denominador)
+
+
+@dataclass
+class ModeloBode:
+    num: np.ndarray                  # coeficientes en s/ω0, de menor a mayor grado
+    den: np.ndarray                  # den[0] = 1
+    w0: float                        # escala de frecuencia (rad/s)
+    orden: tuple
+    error_db: float                  # error eficaz (dB) en los puntos usados
+    error_fase: float                # error eficaz (°)
+    usados: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
+
+    def h(self, f) -> np.ndarray:
+        x = 1j * 2 * np.pi * np.asarray(f, dtype=float) / self.w0
+        return np.polyval(self.num[::-1], x) / np.polyval(self.den[::-1], x)
+
+    def raices(self, coef) -> np.ndarray:
+        c = np.trim_zeros(np.asarray(coef[::-1], dtype=float), "f")
+        return np.roots(c) * self.w0 if len(c) > 1 else np.array([])
+
+    @property
+    def polos(self) -> np.ndarray:
+        return self.raices(self.den)
+
+    @property
+    def ceros(self) -> np.ndarray:
+        return self.raices(self.num)
+
+
+def _resolver(x, H, n, d, w):
+    """Una iteración de Sanathanan–Koerner: N(x) − H·D(x) = 0, pesado por w."""
+    cols = [(x ** i) for i in range(n + 1)] + [(-H * x ** i) for i in range(1, d + 1)]
+    A = np.column_stack(cols) * w[:, None]
+    b = H * w
+    Ar = np.vstack([A.real, A.imag])
+    br = np.concatenate([b.real, b.imag])
+    sol, *_ = np.linalg.lstsq(Ar, br, rcond=None)
+    return sol[:n + 1], np.concatenate([[1.0], sol[n + 1:]])
+
+
+def ajustar_bode(f, H, n, d, iter_sk=12, iter_robusto=6) -> ModeloBode | None:
+    f = np.asarray(f, dtype=float)
+    H = np.asarray(H, dtype=complex)
+    w0 = 2 * np.pi * math.sqrt(f.min() * f.max())
+    x = 1j * 2 * np.pi * f / w0
+    peso = np.ones(len(f))
+    den = np.ones(1)
+    num = None
+    for _ in range(iter_robusto):
+        den = np.ones(1)
+        for _ in range(iter_sk):
+            dprev = np.polyval(den[::-1], x)
+            w = peso / np.abs(H * dprev)           # error relativo (como en dB y grados)
+            num, den = _resolver(x, H, n, d, w)
+        hm = np.polyval(num[::-1], x) / np.polyval(den[::-1], x)
+        e = np.abs(np.log(hm / H))                 # |Δln| ~ dB/8,7 y fase en rad juntos
+        escala = max(1.5 * np.median(e), 0.02)
+        peso = 1 / (1 + (e / escala) ** 2)         # los puntos que no encajan pesan poco
+    hm = np.polyval(num[::-1], x) / np.polyval(den[::-1], x)
+    usados = peso > 0.5
+    if usados.sum() < max(4, n + d + 2):
+        return None
+    edb = 20 * np.log10(np.abs(hm[usados] / H[usados]))
+    efa = np.degrees(np.angle(hm[usados] / H[usados]))
+    m = ModeloBode(num, den, w0, (n, d), float(np.sqrt(np.mean(edb ** 2))),
+                   float(np.sqrt(np.mean(efa ** 2))), usados)
+    if np.any(m.polos.real > 1e-9 * w0):           # inestable: no describe un circuito pasivo
+        return None
+    return m
+
+
+def mejor_modelo_bode(f, H) -> ModeloBode | None:
+    candidatos = []
+    for n, d in BODE_ORDENES:
+        try:
+            m = ajustar_bode(f, H, n, d)
+        except (np.linalg.LinAlgError, ValueError):
+            m = None
+        if m is None:
+            continue
+        frac = m.usados.mean()
+        puntaje = m.error_db + m.error_fase / 10 + 0.15 * (n + d) + 3 * (1 - frac)
+        candidatos.append((puntaje, m))
+    if not candidatos:
+        return None
+    return min(candidatos, key=lambda c: c[0])[1]
+
+
+def _db_abs(x):
+    return 20 * np.log10(np.maximum(np.abs(x), 1e-15))
+
+
+def _fmt_hz(hz):
+    for div, u in ((1e6, "MHz"), (1e3, "kHz"), (1, "Hz")):
+        if hz >= div:
+            return f"{hz / div:.3g} {u}".replace(".", ",")
+    return f"{hz:.3g} Hz".replace(".", ",")
+
+
+def analizar_modelo_bode(m: ModeloBode, f) -> dict:
+    """Describe el modelo: tipo de respuesta, polos y ceros que importan y frecuencias de −3 dB
+    medidas desde la meseta que corresponde (no desde un máximo suelto)."""
+    f = np.asarray(f, dtype=float)
+    fmin, fmax = f.min(), f.max()
+    fg = np.logspace(np.log10(fmin), np.log10(fmax), 800)
+    g = _db_abs(m.h(fg))
+    gmax = g.max()
+
+    def grupos(raices):
+        """[(frecuencia, Q | None)] juntando los pares complejos."""
+        out, vistos = [], []
+        for r in raices:
+            if any(abs(r - np.conj(v)) < 1e-6 * max(abs(r), 1) for v in vistos):
+                continue
+            vistos.append(r)
+            fr = abs(r) / (2 * np.pi)
+            q = abs(r) / (2 * abs(r.real)) if abs(r.imag) > 1e-3 * abs(r) and abs(r.real) > 0 else None
+            out.append((fr, q))
+        return out
+
+    polos, ceros = grupos(m.polos), grupos(m.ceros)
+    # Ceros reales donde la curva ya está 40 dB abajo del máximo: es el piso de acople entre
+    # canales (o el ruido), no el circuito.
+    piso = None
+    ceros_circ = []
+    for fz, q in ceros:
+        # el nivel se mira un poco antes del cero (justo en un rechazo la curva se hunde)
+        if fmin <= fz <= fmax * 3 and _db_abs(m.h([fz / 2]))[0] < gmax - 37:
+            piso = fz if piso is None else min(piso, fz)
+        else:
+            ceros_circ.append((fz, q))
+    en_rango = lambda fr: fmin / 1.5 <= fr <= fmax * 1.5          # noqa: E731
+    p_in = [p for p in polos if en_rango(p[0])]
+    z_in = [z for z in ceros_circ if en_rango(z[0])]
+    z_bajos = sum(1 for z in ceros_circ if z[0] < fmin / 1.5)   # ceros «en 0»: pendiente de subida
+    # Modelo «del circuito»: sin las singularidades de más arriba del rango ni el piso de acople
+    def h_circ(x):
+        s = 1j * 2 * np.pi * np.asarray(x, dtype=float)
+        h = m.h(x)
+        for r in m.polos:
+            if abs(r) / (2 * np.pi) > fmax * 1.5:
+                h = h * (1 - s / r)
+        for r in m.ceros:
+            fr = abs(r) / (2 * np.pi)
+            if fr > fmax * 1.5 or (piso is not None and abs(fr - piso) < 1e-6 * fr):
+                h = h / (1 - s / r)
+        return h
+    gc = _db_abs(h_circ(fg))
+    g_lo, g_hi, k_pk = gc[0], gc[-1], int(np.argmax(gc))
+    g_pk = gc[k_pk]
+
+    def cruces(ref):
+        nivel = ref - 3
+        out = []
+        for i in range(1, len(fg)):
+            a, b = gc[i - 1] - nivel, gc[i] - nivel
+            if a * b < 0:
+                x = math.log10(fg[i - 1]) + (math.log10(fg[i]) - math.log10(fg[i - 1])) * a / (a - b)
+                out.append(10 ** x)
+        return out
+
+    complejos = [p for p in p_in if p[1] is not None]
+    detalles, f3, ref = [], [], None
+    if g_pk - max(g_lo, g_hi) > 3 and 0 < k_pk < len(fg) - 1:
+        tipo = "Pasabanda / resonancia"
+        ref = g_pk
+        f3 = cruces(g_pk)
+        detalles.append(f"Pico de {g_pk:.2f} dB en {_fmt_hz(fg[k_pk])}".replace(".", ",", 1))
+        if len(f3) >= 2:
+            detalles.append(f"Ancho de banda (−3 dB): {_fmt_hz(f3[0])} a {_fmt_hz(f3[-1])}")
+    elif g_lo - g_hi > 6:
+        orden = "2º orden" if complejos or len(p_in) >= 2 else "1er orden"
+        reales = [z for z in z_in if z[1] is None]
+        tipo = f"Pasabajos de {orden}" if not reales else "Pasabajos con escalón"
+        ref = g_lo
+        f3 = cruces(g_lo)[:1]
+    elif g_hi - g_lo > 6:
+        if [z for z in z_in if z[1] is None] and not z_bajos:
+            tipo = "Pasaaltos con pérdida en continua (escalón)"
+        else:
+            tipo = "Pasaaltos de 2º orden" if (complejos or z_bajos >= 2) else "Pasaaltos de 1er orden"
+        ref = g_hi
+        f3 = cruces(g_hi)[-1:]
+    else:
+        tipo = "Respuesta casi plana"
+    for fr, q in p_in:
+        detalles.append(f"Polo en {_fmt_hz(fr)}" + (f" (Q = {q:.2f})".replace(".", ",") if q else ""))
+    for fr, q in z_in:
+        detalles.append(("Rechazo / autorresonancia en " if q else "Cero en ") + _fmt_hz(fr)
+                        + (f" (Q = {q:.2f})".replace(".", ",") if q else ""))
+    if g_lo > -200:
+        detalles.append(f"Ganancia en baja frecuencia: {g_lo:.2f} dB".replace(".", ","))
+    if piso is not None:
+        detalles.append(f"Arriba de ~{_fmt_hz(piso)} domina un piso de {_db_abs(m.h([fmax * 10]))[0]:.0f} dB "
+                        "(acople entre CH1 y CH2): ahí la medición no es del circuito")
+    return {"tipo": tipo, "f3db": f3, "ref_db": ref, "detalles": detalles, "piso": piso,
+            "error_db": m.error_db, "error_fase": m.error_fase, "orden": m.orden}
+
+
+# ---------------------------------------------------------------------------
 # Espectro (FFT): ventanas, promediado, piso de ruido y picos
 # ---------------------------------------------------------------------------
 VENTANAS = ["Hann", "Hamming", "Blackman-Harris", "Flat-top", "Rectangular"]

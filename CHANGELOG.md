@@ -42,6 +42,12 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
   - mantiene el promedio adaptativo cuando la salida es chica.
   - Verificado: con datos sintéticos (RC de 100 kHz, cristal corrido 20 ppm, ruido y cuantización del ADC) el error es menor a 0,1 dB y 1° de 1 kHz a 9 MHz; con el Nucleo simulado (que además filtra los dos canales como el muestreo del ADC), barrido de 1 kHz a 5 MHz en ~3 s con error máximo de 0,08 dB / 1,1° (F767) y 0,17 dB / 1,4° (F429).
 - **Placa → Conexiones:** esquema «Bode con el AD9833 (hasta MHz)».
+- **Bode: ajuste de modelo y frecuencia de corte bien medida.** Al terminar el barrido, la app ajusta polos y ceros a la curva (orden 1 y 2, con un ajuste robusto que no se deja arruinar por puntos sueltos, autorresonancias lejanas ni el acople) y elige el modelo más simple que la explica. Con eso:
+  - dice el **tipo de respuesta** (pasabajos o pasaaltos de 1er/2º orden, pasaaltos con pérdida en continua, pasabanda/resonancia, respuesta plana);
+  - mide los **−3 dB desde la meseta que corresponde** (la de baja frecuencia en un pasabajos, la de alta en un pasaaltos, el pico en un pasabanda), en vez de desde un máximo suelto: antes, en un RL pasaaltos el máximo caía en la subida de 5 MHz y el «corte» salía en 77 kHz, que no significaba nada;
+  - lista **polos, ceros y Q**, la **ganancia en baja frecuencia** (por ejemplo la pérdida por la resistencia del alambre de una bobina), las **autorresonancias** y, si lo hay, el **piso de acople** entre CH1 y CH2, aclarando que ahí la medición ya no es del circuito;
+  - dibuja la **curva del modelo** (punteada naranja) encima de la medida, se puede ocultar, y el CSV la incluye.
+  - Probado con circuitos sintéticos: RC con piso de acople, RL pasaaltos y pasabajos con resistencia del alambre y autorresonancia, RLC pasabanda, 2º orden con acople (no inventa un rechazo) y puntos sueltos malos (los ignora).
 
 ### Corregido
 - **El trazo se congelaba al tocar Single o Autoset** (en las dos placas) y solo volvía reconectando la placa. Esos dos botones pedían una captura nueva mientras la anterior todavía estaba en curso, y el firmware la cortaba a la mitad: el ADC dual quedaba en *overrun* y no volvía a entregar datos. Ahora:
