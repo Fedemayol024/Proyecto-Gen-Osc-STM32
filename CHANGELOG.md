@@ -22,6 +22,12 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
 ### Nuevo
 - **Módulo AD9833 (generador DDS externo).** Panel «Módulo AD9833» en la pestaña Generador: encender y apagar, forma (seno, triangular o cuadrada), frecuencia de 0,1 Hz a 12,5 MHz con paso de 0,093 Hz, y amplitud con el potenciómetro digital MCP41010 del módulo. La configuración se guarda y se reenvía al reconectar. Muestra la frecuencia confirmada por la placa.
 - Si el firmware de la placa no maneja el AD9833, la app no le manda esos comandos y avisa en el panel que hay que cargar el firmware nuevo.
+- **AD9833 ampliado (para probar):**
+  - **Fase** de la salida (pasos de 0,088°) y forma **cuadrada f/2**.
+  - **Modulaciones** hechas por el firmware: barrido lineal o logarítmico (cambia cada 0,5 ms sin saltos de fase), **FSK** y **PSK** (alterna los dos registros de frecuencia o de fase del chip, hasta 5000 símbolos/s), **ráfagas** de N ciclos que arrancan en fase 0, y **AM** lenta moviendo el potenciómetro (hasta 200 Hz, 256 pasos).
+  - **Calibrar amplitud…**: tabla de % → Vpp y tensión media medidos. Con la calibración, la amplitud se puede escribir en Vpp, se muestra entre qué tensiones va la salida y se avisa si no entra en los pines directos (0–3,3 V).
+  - **Medir reloj…**: uniendo VOUT con D32, el frecuencímetro mide una cuadrada de 1 MHz y corrige el error del cristal de 25 MHz. Queda guardado y se aplica en todas las frecuencias.
+  - Con el firmware anterior del AD9833 (solo frecuencia, forma y amplitud), la app no manda los comandos nuevos y avisa.
 - **Pestaña Placa:** esquema «Módulo AD9833» en Conexiones (los 6 cables de CN8 y la salida PGA), sus pines marcados en el dibujo de la placa (D45, D47, D48, D49) y una sección con sus capacidades.
 - **Dibujo de pines más claro:** cada cable de rótulo va por su propio carril, sin cruzarse ni pisarse con los demás. Los pines de la columna de adentro salen por el hueco entre filas, así no pasan por encima del pin de al lado (por ejemplo GND y FSY en CN8).
 - **Resaltado al pasar el mouse:** en Placa → Pines, al pasar el mouse por un rótulo o por su pin, ese cable se marca más grueso, con un halo y un anillo en el pin, y los demás se atenúan. Así se sigue fácil a dónde va cada uno.
@@ -40,6 +46,7 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
 - Single avisa «esperando el disparo… (tocá STOP para cancelar)» y «captura lista».
 
 ### Firmware
+- `ad9833.c`: fase (PHASE0/PHASE1), cuadrada f/2, corrección de reloj y modulaciones (barrido, FSK, PSK, ráfaga, AM) avanzadas desde el lazo principal con el contador de ciclos del núcleo (DWT). Comandos `DDSF`, `DDSCLK` y `DDSMOD`; `INFO?` agrega `dds_mod=1`. Probado en la PC simulando los pines y el contador: palabras SPI, tiempos de FSK/PSK y ráfaga, rango del barrido y del potenciómetro en AM.
 - `osciloscopio.c`: `osc_abortar()` corta los pedidos de DMA del ADC, vacía los datos, borra los flags y reinicia ADC1/ADC2. Nuevo `osc_vigilar()` (en el lazo principal) para rearmar capturas trabadas. Mismo código en las dos placas. **Hay que recompilar y cargar el firmware** en la F767ZI y en la F429ZI (para la F429 copiar `osciloscopio.c/.h` e `instrumento.c`).
 - Nuevo `ad9833.c/.h` (en las dos placas): SPI por software en PC10 (CLK), PC12 (DAT), PD2 (FSY) y PG2 (CS). Comandos `DDS frec forma hab` y `DDSA paso`. `INFO?` agrega `dds_mclk=`. Al arrancar, el módulo queda apagado. Las palabras SPI se verificaron contra la hoja de datos simulando los pines en la PC.
 - **Hay que copiar `ad9833.c/.h` e `instrumento.c` al proyecto** (F767ZI y F429ZI) y recompilar.
@@ -50,7 +57,10 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
 ### Pendiente de probar
 - Single y Autoset con la placa real, con el firmware viejo (ya no debería congelarse, por el arreglo de la app) y con el nuevo.
 - Opciones gráficas en la notebook del compañero y en una pantalla con el escalado de Windows al 125 % / 150 %.
-- Primera prueba real del módulo: frecuencia, las tres formas y el rango de amplitud en VOUT y en PGA, para calibrar los volts.
+- Primera prueba real del módulo: hecha. Seno de 5 MHz limpio, 1,48 Vpp a 80 % sobre ~2 V de continua (medido con un FNIRSI 2C53P).
+- Calibración de amplitud completa (0, 25, 50, 75 y 100 %) en PGA, y una medición en VOUT.
+- Cada modulación con la placa real: barrido (ver la respuesta de un filtro), FSK, PSK, ráfagas y AM.
+- Medir el reloj con el frecuencímetro (VOUT → D32).
 - Bode con el AD9833 por encima de 100 kHz (necesita muestreo coherente; queda para después).
 
 ---

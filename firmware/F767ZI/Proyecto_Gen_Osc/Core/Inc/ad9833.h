@@ -3,9 +3,10 @@
  *
  * El módulo trae:
  *   AD9833   DDS de 28 bits con reloj de 25 MHz: seno, triangular o cuadrada
- *            de 0,1 Hz a 12,5 MHz (limpio hasta unos pocos MHz).
+ *            de 0,1 Hz a 12,5 MHz. Tiene dos registros de frecuencia (FREQ0,
+ *            FREQ1) y dos de fase (PHASE0, PHASE1) que se eligen por software.
  *   MCP41010 potenciómetro digital de 10 kΩ (256 pasos): fija la ganancia del
- *            AD8051, o sea la amplitud de la salida amplificada.
+ *            AD8051, o sea la amplitud de la salida amplificada (PGA).
  *
  * Conexión (conector CN8, iguales en F767ZI y F429ZI):
  *   PC10 (D45) -> CLK      PC12 (D47) -> DAT
@@ -17,22 +18,52 @@
  * mismo código anda en el F7 y en el F4 (sus SPI por hardware son distintos).
  * Reloj en reposo alto: el AD9833 lee en el flanco de bajada y el MCP41010 en
  * el de subida; con el dato quieto durante el pulso, los dos lo leen bien.
+ *
+ * Modulaciones (una por vez), hechas desde el lazo principal con el contador
+ * de ciclos del núcleo (DWT). Cada cambio por SPI tarda ~10-40 us, así que los
+ * tiempos tienen algunas decenas de us de incertidumbre:
+ *   Barrido  lineal o logarítmico de f1 a f2 en t segundos (repite)
+ *   FSK      alterna FREQ0 / FREQ1 a una tasa dada (hasta ~5 kHz)
+ *   PSK      alterna PHASE0 / PHASE1 a una tasa dada (hasta ~5 kHz)
+ *   Ráfaga   N ciclos encendido, el resto del período apagado (fase 0 al empezar)
+ *   AM       mueve el potenciómetro con un seno lento (hasta ~200 Hz, 8 bits)
  */
 #ifndef AD9833_H
 #define AD9833_H
 
 #include <stdint.h>
 
-#define DDS_MCLK_HZ   25000000.0   /* oscilador del módulo */
-#define DDS_F_MAX     12500000.0   /* Nyquist del DDS */
+#define DDS_MCLK_HZ   25000000.0   /* oscilador nominal del módulo */
 
-typedef enum { DDS_SENO = 0, DDS_TRIANGULAR = 1, DDS_CUADRADA = 2 } dds_forma_t;
+typedef enum {
+  DDS_SENO = 0, DDS_TRIANGULAR = 1, DDS_CUADRADA = 2, DDS_CUADRADA_MITAD = 3
+} dds_forma_t;
+
+typedef enum {
+  DDS_MOD_NO = 0, DDS_MOD_BARRIDO_LIN, DDS_MOD_BARRIDO_LOG, DDS_MOD_FSK, DDS_MOD_PSK,
+  DDS_MOD_RAFAGA, DDS_MOD_AM
+} dds_mod_t;
 
 void   dds_iniciar(void);
 /* Configura frecuencia y forma. Si habilitado = 0, la salida queda apagada
- * (DAC del AD9833 dormido). Devuelve la frecuencia real (paso de 0,093 Hz). */
+ * (DAC del AD9833 dormido). Devuelve la frecuencia real. */
 double dds_configurar(double frec, dds_forma_t forma, int habilitado);
 /* Amplitud: posición del potenciómetro digital, 0..255 */
 void   dds_amplitud(uint8_t paso);
+/* Fase de la salida (PHASE0), en grados. Devuelve la real (paso de 0,088°). */
+double dds_fase(double grados);
+/* Reloj real del módulo (para corregir el error del cristal). Devuelve el aplicado. */
+double dds_reloj(double hz);
+double dds_reloj_actual(void);
+/* Modulación. Parámetros según el tipo:
+ *   BARRIDO_LIN/LOG: a = f1, b = f2, c = duración (s)
+ *   FSK: a = segunda frecuencia, b = tasa de conmutación (Hz)
+ *   PSK: a = segunda fase (°),   b = tasa de conmutación (Hz)
+ *   RAFAGA: a = ciclos, b = período de repetición (s)
+ *   AM: a = profundidad (0..1), b = frecuencia moduladora (Hz)
+ * Devuelve 0 si los parámetros no son válidos. */
+int    dds_modulacion(dds_mod_t tipo, double a, double b, double c);
+/* Llamar seguido desde el lazo principal (hace avanzar la modulación). */
+void   dds_lazo(void);
 
 #endif

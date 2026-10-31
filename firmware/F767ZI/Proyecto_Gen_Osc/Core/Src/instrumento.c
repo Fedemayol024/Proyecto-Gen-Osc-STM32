@@ -23,8 +23,13 @@
  *   PWM frec ciclo tm_ns hab    -> OK PWM frec_real ciclo_real tm_real
  *   STAT?                       -> STAT subejec=.. osc=.. osc_err=.. tx_perd=.. osc_rein=..
  *   DDS frec forma hab          -> OK DDS frec_real    (módulo AD9833; forma 0 seno,
- *                                                       1 triangular, 2 cuadrada)
+ *                                                       1 triangular, 2 cuadrada, 3 cuadrada f/2)
  *   DDSA paso                   -> OK DDSA paso        (amplitud, 0..255)
+ *   DDSF grados                 -> OK DDSF grados_real (fase de la salida)
+ *   DDSCLK hz                   -> OK DDSCLK hz        (reloj real del módulo, 20..30 MHz)
+ *   DDSMOD NO | LIN f1 f2 t | LOG f1 f2 t | FSK f2 tasa | PSK fase2 tasa
+ *          | RAF ciclos periodo | AM profundidad fmod
+ *                               -> OK DDSMOD tipo
  */
 #include "instrumento.h"
 #include "hw_util.h"
@@ -214,9 +219,9 @@ static void cmd_info(void)
   char a[24], b[24];
   fmt_double(a, sizeof a, gen_fs(), 3);
   fmt_double(b, sizeof b, osc_fs_max(), 3);
-  responder("INFO gen_fs=%s osc_fsmax=%s tabla=%u ventana=%u cpu=%lu wdg_ms=%lu reinicio=%s dds_mclk=%lu",
+  responder("INFO gen_fs=%s osc_fsmax=%s tabla=%u ventana=%u cpu=%lu wdg_ms=%lu reinicio=%s dds_mclk=%lu dds_mod=1",
             a, b, (unsigned)GEN_TABLA_N, (unsigned)OSC_MAX_VENTANA, (unsigned long)SystemCoreClock,
-            (unsigned long)WDG_MS, causa_reinicio(), (unsigned long)DDS_MCLK_HZ);
+            (unsigned long)WDG_MS, causa_reinicio(), (unsigned long)lround(dds_reloj_actual()));
 }
 
 static void procesar_linea(char *l)
@@ -350,8 +355,8 @@ static void procesar_linea(char *l)
 
   if (!strcmp(c0, "DDS")) {
     if (nt < 4 || !num(tok[1], &v[0]) || !num(tok[2], &v[1]) || !num(tok[3], &v[2]) ||
-        v[1] < 0.0 || v[1] > 2.0) {
-      responder("ERR DDS: DDS frec forma(0 seno,1 triangular,2 cuadrada) hab");
+        v[1] < 0.0 || v[1] > 3.0) {
+      responder("ERR DDS: DDS frec forma(0 seno,1 triangular,2 cuadrada,3 cuadrada f/2) hab");
       return;
     }
     double fr = dds_configurar(v[0], (dds_forma_t)(int)v[1], v[2] != 0.0);
@@ -367,6 +372,45 @@ static void procesar_linea(char *l)
     }
     dds_amplitud((uint8_t)lround(v[0]));
     responder("OK DDSA %u", (unsigned)lround(v[0]));
+    return;
+  }
+
+  if (!strcmp(c0, "DDSF")) {
+    if (nt < 2 || !num(tok[1], &v[0])) { responder("ERR DDSF: DDSF grados"); return; }
+    fmt_double(a, sizeof a, dds_fase(v[0]), 3);
+    responder("OK DDSF %s", a);
+    return;
+  }
+
+  if (!strcmp(c0, "DDSCLK")) {
+    if (nt < 2 || !num(tok[1], &v[0]) || v[0] < 20e6 || v[0] > 30e6) {
+      responder("ERR DDSCLK: DDSCLK hz (20 a 30 MHz)");
+      return;
+    }
+    fmt_double(a, sizeof a, dds_reloj(v[0]), 1);
+    responder("OK DDSCLK %s", a);
+    return;
+  }
+
+  if (!strcmp(c0, "DDSMOD")) {
+    static const struct { const char *nombre; dds_mod_t tipo; int params; } tipos[] = {
+      { "NO", DDS_MOD_NO, 0 }, { "LIN", DDS_MOD_BARRIDO_LIN, 3 }, { "LOG", DDS_MOD_BARRIDO_LOG, 3 },
+      { "FSK", DDS_MOD_FSK, 2 }, { "PSK", DDS_MOD_PSK, 2 }, { "RAF", DDS_MOD_RAFAGA, 2 },
+      { "AM", DDS_MOD_AM, 2 },
+    };
+    int k = -1;
+    for (int i = 0; nt >= 2 && i < (int)(sizeof tipos / sizeof tipos[0]); i++) {
+      if (!strcmp(tok[1], tipos[i].nombre)) { k = i; break; }
+    }
+    v[0] = v[1] = v[2] = 0.0;
+    int ok = k >= 0 && nt >= 2 + tipos[k].params;
+    for (int i = 0; ok && k >= 0 && i < tipos[k].params; i++) ok = num(tok[2 + i], &v[i]);
+    if (!ok || !dds_modulacion(tipos[k].tipo, v[0], v[1], v[2])) {
+      responder("ERR DDSMOD: NO | LIN f1 f2 t | LOG f1 f2 t | FSK f2 tasa | PSK fase2 tasa | "
+                "RAF ciclos periodo | AM prof fmod");
+      return;
+    }
+    responder("OK DDSMOD %s", tipos[k].nombre);
     return;
   }
 
@@ -466,6 +510,7 @@ void instrumento_lazo(void)
   }
   procesar_rx();
   gen_vigilar();
+  dds_lazo();                            /* modulaciones del AD9833 */
 
   /* Osciloscopio: preparar el envío de la ventana capturada */
   if (trama == TRAMA_NO && osc_listo()) {

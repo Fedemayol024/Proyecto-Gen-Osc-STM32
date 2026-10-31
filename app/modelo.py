@@ -691,9 +691,25 @@ def ruta_config(placa: str = PLACA_POR_DEFECTO) -> Path:
 # ---------------------------------------------------------------------------
 # Módulo AD9833 (DDS externo, con potenciómetro digital MCP41010 para la amplitud)
 # ---------------------------------------------------------------------------
-DDS_MCLK = 25e6                       # oscilador del módulo
+DDS_MCLK = 25e6                       # oscilador nominal del módulo
+DDS_MCLK_MIN, DDS_MCLK_MAX = 20e6, 30e6
 DDS_F_MIN, DDS_F_MAX = 0.1, 12.5e6
-DDS_FORMAS = ["Seno", "Triangular", "Cuadrada"]
+DDS_FORMAS = ["Seno", "Triangular", "Cuadrada", "Cuadrada f/2"]
+DDS_MODULACIONES = ["Ninguna", "Barrido", "FSK", "PSK", "Ráfaga", "AM"]
+DDS_TASA_MAX = 5000.0                 # FSK / PSK: símbolos por segundo
+DDS_AM_FMAX = 200.0
+# Puntos sugeridos para calibrar la amplitud (% del potenciómetro)
+DDS_PUNTOS_CAL = [0.0, 25.0, 50.0, 75.0, 100.0]
+
+
+def _num(v, defecto: float, vmin: float, vmax: float) -> float:
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return defecto
+    if not math.isfinite(x):
+        return defecto
+    return min(max(x, vmin), vmax)
 
 
 @dataclass
@@ -702,39 +718,158 @@ class ConfigDDS:
     forma: str = "Seno"
     frecuencia: float = 100e3
     amplitud: float = 50.0            # % del potenciómetro digital (0..100)
+    fase: float = 0.0                 # grados
+    modulacion: str = "Ninguna"
+    bar_log: bool = True
+    bar_f1: float = 1e3
+    bar_f2: float = 1e6
+    bar_t: float = 2.0
+    fsk_f2: float = 2e3
+    fsk_tasa: float = 100.0
+    psk_fase2: float = 180.0
+    psk_tasa: float = 100.0
+    raf_ciclos: float = 10.0
+    raf_periodo: float = 0.01
+    am_prof: float = 50.0             # %
+    am_frec: float = 10.0
+    mclk: float = DDS_MCLK            # reloj real del módulo (se mide con el frecuencímetro)
+    cal: list = field(default_factory=list)   # [[%, Vpp, V media | None], ...] medidos
 
     @staticmethod
     def desde_dict(d: dict | None) -> "ConfigDDS":
         c = ConfigDDS()
-        for k in asdict(c):
-            if isinstance(d, dict) and k in d:
-                setattr(c, k, d[k])
-        if c.forma not in DDS_FORMAS:
-            c.forma = "Seno"
-        try:
-            c.frecuencia = float(min(max(float(c.frecuencia), DDS_F_MIN), DDS_F_MAX))
-            c.amplitud = float(min(max(float(c.amplitud), 0.0), 100.0))
-        except (TypeError, ValueError):
-            c.frecuencia, c.amplitud = 100e3, 50.0
-        c.habilitado = bool(c.habilitado)
+        d = d if isinstance(d, dict) else {}
+        c.habilitado = bool(d.get("habilitado", False))
+        c.forma = d.get("forma") if d.get("forma") in DDS_FORMAS else "Seno"
+        c.modulacion = d.get("modulacion") if d.get("modulacion") in DDS_MODULACIONES else "Ninguna"
+        c.bar_log = bool(d.get("bar_log", True))
+        mclk = _num(d.get("mclk"), DDS_MCLK, 0.0, 1e12)
+        c.mclk = mclk if DDS_MCLK_MIN <= mclk <= DDS_MCLK_MAX else DDS_MCLK   # igual que el firmware
+        fmax = c.mclk / 2
+        c.frecuencia = _num(d.get("frecuencia"), 100e3, DDS_F_MIN, fmax)
+        c.amplitud = _num(d.get("amplitud"), 50.0, 0.0, 100.0)
+        c.fase = _num(d.get("fase"), 0.0, 0.0, 360.0)
+        c.bar_f1 = _num(d.get("bar_f1"), 1e3, DDS_F_MIN, fmax)
+        c.bar_f2 = _num(d.get("bar_f2"), 1e6, DDS_F_MIN, fmax)
+        c.bar_t = _num(d.get("bar_t"), 2.0, 0.05, 1000.0)
+        c.fsk_f2 = _num(d.get("fsk_f2"), 2e3, 0.0, fmax)
+        c.fsk_tasa = _num(d.get("fsk_tasa"), 100.0, 0.1, DDS_TASA_MAX)
+        c.psk_fase2 = _num(d.get("psk_fase2"), 180.0, 0.0, 360.0)
+        c.psk_tasa = _num(d.get("psk_tasa"), 100.0, 0.1, DDS_TASA_MAX)
+        c.raf_ciclos = float(round(_num(d.get("raf_ciclos"), 10.0, 1.0, 1e6)))
+        c.raf_periodo = _num(d.get("raf_periodo"), 0.01, 0.001, 100.0)
+        c.am_prof = _num(d.get("am_prof"), 50.0, 0.0, 100.0)
+        c.am_frec = _num(d.get("am_frec"), 10.0, 0.01, DDS_AM_FMAX)
+        c.cal = limpiar_cal_dds(d.get("cal"))
         return c
 
 
-def dds_frecuencia_real(f: float) -> float:
-    """El AD9833 tiene 28 bits de frecuencia: paso de 25 MHz / 2^28 ≈ 0,093 Hz."""
-    f = min(max(f, 0.0), DDS_F_MAX)             # igual que el firmware
-    reg = min(round(f * 2**28 / DDS_MCLK), 2**28 - 1)
-    return reg * DDS_MCLK / 2**28
+def limpiar_cal_dds(cal) -> list:
+    """Puntos de calibración válidos, ordenados por %: [[%, Vpp, V media o None], ...]."""
+    salida = {}
+    if isinstance(cal, (list, tuple)):
+        for fila in cal:
+            try:
+                pct, vpp = float(fila[0]), float(fila[1])
+                vmed = float(fila[2]) if len(fila) > 2 and fila[2] is not None else None
+            except (TypeError, ValueError, IndexError):
+                continue
+            if 0 <= pct <= 100 and 0 <= vpp < 100 and math.isfinite(vpp):
+                salida[pct] = [pct, vpp, vmed if vmed is None or math.isfinite(vmed) else None]
+    return [salida[k] for k in sorted(salida)]
+
+
+def dds_frecuencia_real(f: float, mclk: float = DDS_MCLK) -> float:
+    """El AD9833 tiene 28 bits de frecuencia: paso de mclk / 2^28 (≈ 0,093 Hz)."""
+    f = min(max(f, 0.0), mclk / 2)             # igual que el firmware
+    reg = min(round(f * 2**28 / mclk), 2**28 - 1)
+    return reg * mclk / 2**28
+
+
+def dds_fase_real(grados: float) -> float:
+    return (round((grados % 360) * 4096 / 360) % 4096) * 360 / 4096
 
 
 def dds_paso_amplitud(porcentaje: float) -> int:
     return int(round(min(max(porcentaje, 0.0), 100.0) / 100 * 255))
 
 
-def dds_comandos(c: ConfigDDS) -> list[str]:
+def dds_vpp(cal: list, porcentaje: float) -> float | None:
+    """Vpp estimado para una amplitud en %, según los puntos medidos (None sin calibrar).
+    Con un solo punto se supone proporcional (ganancia ∝ posición del potenciómetro)."""
+    if not cal:
+        return None
+    if len(cal) == 1:
+        p0, v0 = cal[0][0], cal[0][1]
+        return v0 * porcentaje / p0 if p0 > 0 else None
+    xs = [c[0] for c in cal]
+    ys = [c[1] for c in cal]
+    return float(np.interp(porcentaje, xs, ys))
+
+
+def dds_vmedia(cal: list, porcentaje: float) -> float | None:
+    pts = [(c[0], c[2]) for c in cal if c[2] is not None]
+    if not pts:
+        return None
+    if len(pts) == 1:
+        return pts[0][1]
+    return float(np.interp(porcentaje, [p[0] for p in pts], [p[1] for p in pts]))
+
+
+def dds_porcentaje_para_vpp(cal: list, vpp: float) -> float | None:
+    """Inversa de dds_vpp (supone que el Vpp crece con el %). None si no hay calibración."""
+    if not cal:
+        return None
+    if len(cal) == 1:
+        p0, v0 = cal[0][0], cal[0][1]
+        return min(max(vpp / v0 * p0, 0.0), 100.0) if v0 > 0 else None
+    xs = [c[1] for c in cal]
+    ys = [c[0] for c in cal]
+    if any(b < a for a, b in zip(xs, xs[1:])):     # no creciente: no se puede invertir bien
+        orden = sorted(zip(xs, ys))
+        xs, ys = [o[0] for o in orden], [o[1] for o in orden]
+    return float(np.interp(vpp, xs, ys))
+
+
+def dds_mclk_corregido(mclk_actual: float, f_pedida: float, f_medida: float) -> float | None:
+    """Reloj real del módulo a partir de una frecuencia pedida y la medida con el
+    frecuencímetro. None si la medición no tiene sentido (sin señal o muy lejos)."""
+    f_salida = dds_frecuencia_real(f_pedida, mclk_actual)   # lo que el firmware cree que sale
+    if f_salida <= 0 or not (f_medida > 0):
+        return None
+    nuevo = mclk_actual * f_medida / f_salida
+    if abs(nuevo / DDS_MCLK - 1) > 0.005:                   # más de 0,5 %: no es el AD9833
+        return None
+    return nuevo
+
+
+def dds_texto_modulacion(c: ConfigDDS) -> str:
+    m = c.modulacion
+    if m == "Barrido":
+        return f"DDSMOD {'LOG' if c.bar_log else 'LIN'} {c.bar_f1:.4f} {c.bar_f2:.4f} {c.bar_t:.4f}"
+    if m == "FSK":
+        return f"DDSMOD FSK {c.fsk_f2:.4f} {c.fsk_tasa:.4f}"
+    if m == "PSK":
+        return f"DDSMOD PSK {c.psk_fase2:.3f} {c.psk_tasa:.4f}"
+    if m == "Ráfaga":
+        return f"DDSMOD RAF {int(c.raf_ciclos)} {c.raf_periodo:.6f}"
+    if m == "AM":
+        return f"DDSMOD AM {c.am_prof / 100:.4f} {c.am_frec:.4f}"
+    return "DDSMOD NO"
+
+
+def dds_comandos(c: ConfigDDS, extendido: bool = True) -> list[str]:
+    """Comandos para aplicar la configuración. Sin 'extendido' (firmware que solo conoce
+    DDS y DDSA) no se mandan reloj, fase ni modulación, y la cuadrada f/2 va como cuadrada."""
     forma = DDS_FORMAS.index(c.forma) if c.forma in DDS_FORMAS else 0
-    return [f"DDSA {dds_paso_amplitud(c.amplitud)}",
-            f"DDS {c.frecuencia:.4f} {forma} {1 if c.habilitado else 0}"]
+    if not extendido:
+        return [f"DDSA {dds_paso_amplitud(c.amplitud)}",
+                f"DDS {c.frecuencia:.4f} {min(forma, 2)} {1 if c.habilitado else 0}"]
+    return [f"DDSCLK {c.mclk:.1f}",
+            f"DDSA {dds_paso_amplitud(c.amplitud)}",
+            f"DDSF {c.fase:.3f}",
+            f"DDS {c.frecuencia:.4f} {forma} {1 if c.habilitado else 0}",
+            dds_texto_modulacion(c)]
 
 
 def ruta_preferencias() -> Path:

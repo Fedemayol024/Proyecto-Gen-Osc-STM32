@@ -28,6 +28,7 @@ if HAY_QT:
     import modelo as M  # noqa: E402
     import tab_osciloscopio as TO  # noqa: E402
     import widgets as W  # noqa: E402
+    import panel_dds  # noqa: E402
 
     _app = QApplication.instance() or QApplication(sys.argv)
 
@@ -382,6 +383,113 @@ class TestPestanaOsciloscopio(unittest.TestCase):
             gen.al_linea("OK DDS 999999.9776")
             self.assertIn("confirmada", gen.dds.lbl_info.text())
         self.assertEqual(gen.estado_config()["dds"]["forma"], "Cuadrada")
+
+    def _dds_conectado(self, info):
+        enviados = []
+        self.v.disp.enviar = lambda t: enviados.append(t) or True
+        self.v.disp.enviar_tabla = lambda *a: True
+        p = mock.patch.object(type(self.v.disp), "esta_conectado", new_callable=mock.PropertyMock,
+                              return_value=True)
+        p.start()
+        self.addCleanup(p.stop)
+        self.v.disp.info = info
+        return enviados
+
+    def test_ad9833_firmware_nuevo_manda_fase_modulacion_y_reloj(self):
+        enviados = self._dds_conectado({"dds_mclk": 25e6, "dds_mod": 1})
+        gen, d = self.v.tab_gen, self.v.tab_gen.dds
+        gen.reenviar_todo()
+        for cmd in ("DDSCLK 25000000.0", "DDSF 0.000", "DDSMOD NO"):
+            self.assertIn(cmd, enviados)
+        # modulación: solo se ven los campos del tipo elegido, y se manda solo lo que cambió
+        enviados.clear()
+        d.mod.setCurrentText("FSK")
+        gen._enviar()
+        self.assertEqual(enviados, ["DDSMOD FSK 2000.0000 100.0000"])
+        self.assertTrue(d.filas_mod["FSK"][0].isVisibleTo(d))
+        self.assertFalse(d.filas_mod["Barrido"][0].isVisibleTo(d))
+        enviados.clear()
+        d.fase.set_valor(90)
+        d._cambio()
+        gen._enviar()
+        self.assertEqual(enviados, ["DDSF 90.000"])
+        # otro reloj: cambian todos los registros, se manda todo de nuevo
+        enviados.clear()
+        d.c.mclk = 25.0004e6
+        gen.programar_envio_dds()
+        gen._enviar()
+        self.assertEqual(enviados[0], "DDSCLK 25000400.0")
+        self.assertEqual(len(enviados), 5)
+        # ráfaga más larga que el período: avisa
+        d.mod.setCurrentText("Ráfaga")
+        d.raf_ciclos.setValue(1000)
+        self.assertIn("continua", d.lbl_mod.text())
+
+    def test_ad9833_firmware_basico_no_recibe_comandos_nuevos(self):
+        enviados = self._dds_conectado({"dds_mclk": 25e6})
+        self.v.tab_gen.dds.mod.setCurrentText("AM")
+        self.v.tab_gen.reenviar_todo()
+        self.assertFalse(any(e.startswith(("DDSF", "DDSMOD", "DDSCLK")) for e in enviados))
+        self.assertIn("firmware", self.v.tab_gen.dds.lbl_info.text())
+
+    def test_ad9833_amplitud_en_volts_con_calibracion(self):
+        d = self.v.tab_gen.dds
+        self.assertFalse(d.fila_vpp.isEnabled())                 # sin calibrar
+        d.c.cal = [[0.0, 0.0, 2.0], [100.0, 1.85, 2.0]]
+        d._mostrar()
+        self.assertTrue(d.fila_vpp.isEnabled())
+        self.assertAlmostEqual(d.vpp.valor(), 0.925, places=3)   # 50 %
+        self.assertIn("de continua", d.lbl_info.text())
+        d.vpp.set_valor(1.48)
+        d._vpp_editado(1.48)                                      # escribir Vpp mueve el %
+        self.assertAlmostEqual(d.amp.valor(), 80.0, places=1)
+        d.c.cal = [[0.0, 0.0, 2.6], [100.0, 1.85, 2.6]]          # se pasaría de 3,3 V
+        d._mostrar()
+        self.assertIn("pines directos", d.lbl_info.text())
+
+    def test_ad9833_dialogo_de_calibracion(self):
+        from panel_dds import DialogoCalDDS
+        d = self.v.tab_gen.dds
+        d.c.cal = [[80.0, 1.48, 2.02]]
+        dlg = DialogoCalDDS(d)
+        self.assertEqual(dlg.tabla.rowCount(), 6)                 # 0/25/50/75/100 y el medido
+        fila = [dlg.tabla.item(r, 0).text() for r in range(6)].index("50")
+        dlg.tabla.item(fila, 1).setText("0,93")
+        dlg.tabla.item(fila, 2).setText("2,01")
+        self.assertEqual(dlg.puntos(), [[50.0, 0.93, 2.01], [80.0, 1.48, 2.02]])
+        dlg.tabla.setCurrentCell(fila, 0)
+        with mock.patch.object(type(self.v.disp), "esta_conectado", new_callable=mock.PropertyMock,
+                               return_value=False):
+            dlg._probar()
+        self.assertEqual((d.c.frecuencia, d.c.amplitud, d.c.habilitado), (1000.0, 50.0, True))
+        dlg.deleteLater()
+
+    def test_ad9833_medir_reloj_con_el_frecuencimetro(self):
+        enviados = self._dds_conectado({"dds_mclk": 25e6, "dds_mod": 1})
+        d = self.v.tab_gen.dds
+        d.mod.setCurrentText("PSK")
+        self.v.tab_gen.reenviar_todo()
+        enviados.clear()
+        with mock.patch("panel_dds.QMessageBox.question", return_value=panel_dds.QMessageBox.Yes):
+            d.medir_reloj()
+        self.assertEqual(enviados[-2:], ["DDS 1000000.0000 2 1", "FCNT 1000 0"])
+        self.assertIn("DDSMOD NO", enviados)
+        self.assertFalse(d.btn_reloj.isEnabled())
+        enviados.clear()
+        f_med = M.dds_frecuencia_real(1e6) * 25.0004e6 / 25e6     # cristal real +16 ppm
+        self.v._al_linea(f"FREQ {f_med:.6f} C {int(f_med)} 1000")
+        self.assertAlmostEqual(d.c.mclk, 25.0004e6, delta=1)
+        self.assertIn("ppm", self.v.statusBar().currentMessage())
+        self.assertTrue(d.btn_reloj.isEnabled())
+        self.v.tab_gen._enviar()                                  # vuelve a lo que estaba, con el reloj nuevo
+        self.assertEqual(enviados[0], "DDSCLK 25000400.0")
+        self.assertIn("DDSMOD PSK 180.000 100.0000", enviados)
+        # una medición sin sentido no cambia el reloj
+        with mock.patch("panel_dds.QMessageBox.question", return_value=panel_dds.QMessageBox.Yes):
+            d.medir_reloj()
+        self.v._al_linea("FREQ 0.000000 R 0 1000")
+        self.assertAlmostEqual(d.c.mclk, 25.0004e6, delta=1)
+        self.assertIn("revisá la conexión", self.v.statusBar().currentMessage())
 
     # --------------------------------------------------------------- reconexión / watchdog
     def test_reconexion_automatica_tras_un_reinicio(self):

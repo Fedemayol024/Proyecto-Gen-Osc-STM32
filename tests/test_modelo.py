@@ -295,10 +295,52 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(M.dds_paso_amplitud(-5), 0)
         c = M.ConfigDDS.desde_dict({"habilitado": True, "forma": "Triangular", "frecuencia": 2e6,
                                     "amplitud": 50})
-        self.assertEqual(M.dds_comandos(c), ["DDSA 128", "DDS 2000000.0000 1 1"])
-        c = M.ConfigDDS.desde_dict({"forma": "Rara", "frecuencia": 1e9, "amplitud": "x"})
-        self.assertEqual((c.forma, c.habilitado), ("Seno", False))
-        self.assertEqual(c.frecuencia, 100e3)                          # valor inválido: por defecto
+        self.assertEqual(M.dds_comandos(c, extendido=False), ["DDSA 128", "DDS 2000000.0000 1 1"])
+        self.assertEqual(M.dds_comandos(c), ["DDSCLK 25000000.0", "DDSA 128", "DDSF 0.000",
+                                             "DDS 2000000.0000 1 1", "DDSMOD NO"])
+        c.forma = "Cuadrada f/2"
+        self.assertEqual(M.dds_comandos(c, extendido=False)[1], "DDS 2000000.0000 2 1")  # firmware viejo
+        c = M.ConfigDDS.desde_dict({"forma": "Rara", "frecuencia": 1e9, "amplitud": "x", "mclk": 5})
+        self.assertEqual((c.forma, c.habilitado, c.mclk), ("Seno", False, 25e6))
+        self.assertEqual((c.frecuencia, c.amplitud), (12.5e6, 50.0))       # recortada / por defecto
+
+    def test_ad9833_modulaciones(self):
+        c = M.ConfigDDS.desde_dict({"modulacion": "Barrido", "bar_log": False, "bar_f1": 10,
+                                    "bar_f2": 2e6, "bar_t": 3})
+        self.assertEqual(M.dds_texto_modulacion(c), "DDSMOD LIN 10.0000 2000000.0000 3.0000")
+        for mod, esperado in [("FSK", "DDSMOD FSK 2000.0000 100.0000"),
+                              ("PSK", "DDSMOD PSK 180.000 100.0000"),
+                              ("Ráfaga", "DDSMOD RAF 10 0.010000"),
+                              ("AM", "DDSMOD AM 0.5000 10.0000"),
+                              ("Ninguna", "DDSMOD NO")]:
+            c.modulacion = mod
+            self.assertEqual(M.dds_texto_modulacion(c), esperado)
+        c = M.ConfigDDS.desde_dict({"fsk_tasa": 1e6, "am_frec": 1e4, "raf_ciclos": 2.6})
+        self.assertEqual((c.fsk_tasa, c.am_frec, c.raf_ciclos), (M.DDS_TASA_MAX, M.DDS_AM_FMAX, 3.0))
+        self.assertAlmostEqual(M.dds_fase_real(90), 90.0)
+        self.assertAlmostEqual(M.dds_fase_real(370), 10.0195, places=3)   # 114/4096 · 360
+
+    def test_ad9833_calibracion_de_amplitud(self):
+        self.assertIsNone(M.dds_vpp([], 50))
+        uno = M.limpiar_cal_dds([[80, 1.48, 2.02], ["x", 1], [150, 1]])  # solo la medición válida
+        self.assertEqual(uno, [[80.0, 1.48, 2.02]])
+        self.assertAlmostEqual(M.dds_vpp(uno, 40), 0.74)                 # proporcional
+        self.assertAlmostEqual(M.dds_vmedia(uno, 40), 2.02)
+        self.assertAlmostEqual(M.dds_porcentaje_para_vpp(uno, 0.74), 40)
+        cal = M.limpiar_cal_dds([[100, 2.0, 2.1], [0, 0.0, 1.9], [50, 0.9, None]])
+        self.assertEqual([p[0] for p in cal], [0.0, 50.0, 100.0])        # ordenada
+        self.assertAlmostEqual(M.dds_vpp(cal, 75), 1.45)
+        self.assertAlmostEqual(M.dds_vmedia(cal, 50), 2.0)               # sin el punto sin media
+        self.assertAlmostEqual(M.dds_porcentaje_para_vpp(cal, 1.45), 75)
+
+    def test_ad9833_correccion_de_reloj(self):
+        # el módulo tiene un cristal de 25,0004 MHz (+16 ppm): a 1 MHz pedido sale 16 Hz de más
+        f_sal = M.dds_frecuencia_real(1e6) * 25.0004e6 / 25e6
+        nuevo = M.dds_mclk_corregido(25e6, 1e6, f_sal)
+        self.assertAlmostEqual(nuevo, 25.0004e6, delta=1)
+        self.assertAlmostEqual(M.dds_frecuencia_real(1e6, nuevo) * 25.0004e6 / nuevo, 1e6, delta=0.1)
+        self.assertIsNone(M.dds_mclk_corregido(25e6, 1e6, 0))           # sin señal
+        self.assertIsNone(M.dds_mclk_corregido(25e6, 1e6, 1.2e6))       # otra señal
 
     def test_escala_segun_resolucion(self):
         pant = (1920, 1080)

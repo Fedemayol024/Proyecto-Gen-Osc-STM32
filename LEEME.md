@@ -168,7 +168,11 @@ Las calibraciones y los ajustes se guardan en `%APPDATA%\InstrumentoF767\`: `con
 - **Alimentación ±12 V:** módulo DC-DC A0512S-1W desde el 5 V del Nucleo. También sirve una fuente partida, o dos baterías de 9 V.
 
 ### Módulo AD9833 (generador DDS externo, opcional)
-Módulo comercial con **AD9833** (DDS, oscilador de 25 MHz), **MCP41010** (potenciómetro digital de 10 kΩ que fija la amplitud) y **AD8051** (amplificador de salida). Seno, triangular o cuadrada de 0,1 Hz a 12,5 MHz, con un paso de 0,093 Hz. Se maneja desde la pestaña **Generador** (panel «Módulo AD9833»).
+Módulo comercial con **AD9833** (DDS, oscilador de 25 MHz), **MCP41010** (potenciómetro digital de 10 kΩ que fija la amplitud) y **AD8051** (amplificador de salida). Seno, triangular o cuadrada (también cuadrada a f/2) de 0,1 Hz a 12,5 MHz, con un paso de 0,093 Hz y fase con pasos de 0,088°. Se maneja desde la pestaña **Generador** (panel «Módulo AD9833»):
+
+- **Modulación** hecha por el firmware: barrido lineal o logarítmico, FSK y PSK (hasta 5000 símbolos/s), ráfagas de N ciclos y una AM lenta con el potenciómetro (hasta 200 Hz).
+- **Calibrar amplitud…**: tabla de % → Vpp y tensión media medidos en la salida PGA. Con eso la amplitud se puede pedir en Vpp, y la app avisa si la salida se pasa de 0–3,3 V.
+- **Medir reloj…**: con VOUT unido a D32, el frecuencímetro mide una cuadrada de 1 MHz y corrige el error del cristal de 25 MHz (queda guardado).
 
 | Nucleo (CN8) | Módulo |
 |---|---|
@@ -234,8 +238,11 @@ Son líneas de texto terminadas en `\n`.
 | `CAPX` | `OK CAPX` |
 | `FCNT ms continuo` | `FREQ f metodo flancos ms` |
 | `PWM frec ciclo tm_ns hab` | `OK PWM frec_real ciclo_real tm_real` |
-| `DDS frec forma hab` | `OK DDS frec_real` (módulo AD9833; forma 0 seno, 1 triangular, 2 cuadrada) |
+| `DDS frec forma hab` | `OK DDS frec_real` (módulo AD9833; forma 0 seno, 1 triangular, 2 cuadrada, 3 cuadrada f/2) |
 | `DDSA paso` | `OK DDSA paso` (amplitud del AD9833, 0..255) |
+| `DDSF grados` | `OK DDSF grados_real` (fase) |
+| `DDSCLK hz` | `OK DDSCLK hz` (reloj real del módulo, 20 a 30 MHz) |
+| `DDSMOD NO` / `LIN f1 f2 t` / `LOG f1 f2 t` / `FSK f2 tasa` / `PSK fase2 tasa` / `RAF ciclos período` / `AM prof fmod` | `OK DDSMOD tipo` |
 
 ## 5. Límites y consejos
 - **Si la placa se cuelga o se reinicia:** el watchdog la reinicia sola en 2 s. La app detecta que se cortó el USB, la busca durante 20 s, se reconecta, vuelve a mandar la configuración del generador y avisa en la barra de estado si el reinicio fue por el watchdog. En la pestaña **Placa** se ve la causa del último reinicio. Durante la reconexión el botón dice *Cancelar*.

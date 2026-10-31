@@ -48,7 +48,8 @@ class Canal:
 
 gen = {1: Canal(), 2: Canal()}
 pwm = {"f": 0.0, "hab": False}
-dds = {"f": 0.0, "forma": 0, "hab": False, "amp": 0}
+dds = {"f": 0.0, "forma": 0, "hab": False, "amp": 0, "fase": 0.0, "mclk": 25e6, "mod": "NO"}
+DDS_MCLK_REAL = 25.0004e6          # el cristal "verdadero" del módulo simulado (+16 ppm)
 fcnt = {"ms": 0, "cont": False, "t": 0.0}
 
 
@@ -129,6 +130,9 @@ time.sleep(0.2)
 while True:
     if fcnt["ms"] and time.monotonic() >= fcnt["t"]:
         f = pwm["f"] if pwm["hab"] else gen[1].f
+        if dds["hab"] and dds["forma"] in (2, 3):     # cuadrada del AD9833 en D32
+            reg = round(dds["f"] * 2**28 / dds["mclk"])
+            f = reg * DDS_MCLK_REAL / 2**28 / (2 if dds["forma"] == 3 else 1)
         f = f * (1 + rng.normal(0, 2e-6)) if f else 0.0
         metodo = "R" if 0 < f < 5000 else "C"
         resp(f"FREQ {f:.6f} {metodo} {int(f * fcnt['ms'] / 1000)} {fcnt['ms']}")
@@ -170,7 +174,7 @@ while True:
             if cmd == "ID?":
                 resp(f"INSTR-{PLACA} v0.8.19")
             elif cmd == "INFO?":
-                resp(f"INFO gen_fs={FS_GEN:.3f} osc_fsmax={FSMAX:.3f} tabla=4096 ventana=8192 cpu={CPU} wdg_ms=2000 reinicio=energia dds_mclk=25000000")
+                resp(f"INFO gen_fs={FS_GEN:.3f} osc_fsmax={FSMAX:.3f} tabla=4096 ventana=8192 cpu={CPU} wdg_ms=2000 reinicio=energia dds_mclk={round(dds['mclk'])} dds_mod=1")
             elif cmd == "GTBL":
                 bin_pend = (int(p[1]), int(p[2]), int(p[3]))
             elif cmd == "GSET":
@@ -202,11 +206,29 @@ while True:
                 resp(f"OK PWM {pwm['f']:.4f} {100 * ccr / per:.3f} {round(tm / (1e9 / TCLK2)) * 1e9 / TCLK2:.2f}")
             elif cmd == "DDS":                 # módulo AD9833
                 f, forma, hab = float(p[1]), int(float(p[2])), p[3] != "0"
-                if not 0 <= forma <= 2:
+                if not 0 <= forma <= 3:
                     raise ValueError("forma")
-                reg = min(max(round(min(max(f, 0), 12.5e6) * 2**28 / 25e6), 0), 2**28 - 1)
-                dds.update(f=reg * 25e6 / 2**28, forma=forma, hab=hab)
+                mclk = dds["mclk"]
+                reg = min(max(round(min(max(f, 0), mclk / 2) * 2**28 / mclk), 0), 2**28 - 1)
+                dds.update(f=reg * mclk / 2**28, forma=forma, hab=hab)
                 resp(f"OK DDS {dds['f']:.4f}")
+            elif cmd == "DDSF":
+                g = float(p[1]) % 360
+                dds["fase"] = (round(g * 4096 / 360) % 4096) * 360 / 4096
+                resp(f"OK DDSF {dds['fase']:.3f}")
+            elif cmd == "DDSCLK":
+                hz = float(p[1])
+                if not 20e6 <= hz <= 30e6:
+                    raise ValueError("reloj")
+                dds["mclk"] = hz
+                resp(f"OK DDSCLK {hz:.1f}")
+            elif cmd == "DDSMOD":
+                params = {"NO": 0, "LIN": 3, "LOG": 3, "FSK": 2, "PSK": 2, "RAF": 2, "AM": 2}
+                if p[1] not in params or len(p) < 2 + params[p[1]]:
+                    raise ValueError("tipo")
+                [float(x) for x in p[2:2 + params[p[1]]]]
+                dds["mod"] = p[1]
+                resp(f"OK DDSMOD {p[1]}")
             elif cmd == "DDSA":
                 n = round(float(p[1]))
                 if not 0 <= n <= 255:
