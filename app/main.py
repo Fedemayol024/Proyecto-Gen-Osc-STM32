@@ -110,6 +110,7 @@ class Ventana(QMainWindow):
     def __init__(self, placa: str = M.PLACA_POR_DEFECTO, auto_puerto: str | None = None):
         super().__init__()
         self.placa = placa if placa in M.PLACAS else M.PLACA_POR_DEFECTO
+        self.version_app = VERSION_TEXTO
         nombre = M.nombre_placa(self.placa)
         self.setWindowTitle(f"Instrumento {nombre} · Osciloscopio y generador · v{VERSION_TEXTO}")
         self.resize(1360, 860)

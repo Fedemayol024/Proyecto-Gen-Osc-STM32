@@ -140,10 +140,6 @@ class TestPuntoDelBarrido(unittest.TestCase):
         self.assertAlmostEqual(fase, -45.0, delta=0.5)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestBodeSubmuestreo(unittest.TestCase):
     """Bode con el AD9833: por encima de Nyquist se mide submuestreando."""
 
@@ -268,3 +264,68 @@ class TestModeloBode(unittest.TestCase):
         a = M.analizar_modelo_bode(m, self.F)
         self.assertAlmostEqual(a["f3db"][0], 5e3, delta=60)
         self.assertEqual(int((~m.usados).sum()), 3)
+
+
+@unittest.skipUnless(HAY_QT, "PySide6 no está instalado")
+class TestInformeBode(unittest.TestCase):
+    """El informe PDF se genera desde la pestaña Bode, con y sin modelo."""
+
+    def setUp(self):
+        import main as A
+        self._app = QApplication.instance() or QApplication(sys.argv)
+        self._tmp = tempfile.TemporaryDirectory()
+        self._appdata = os.environ.get("APPDATA")
+        os.environ["APPDATA"] = self._tmp.name
+        A.listar_puertos = lambda: []
+        self.v = A.Ventana()
+        self.v.disp.enviar = lambda texto: True
+        self.bode = self.v.tab_bode
+
+    def tearDown(self):
+        self.v.close()
+        if self._appdata is None:
+            os.environ.pop("APPDATA", None)
+        else:
+            os.environ["APPDATA"] = self._appdata
+        self._tmp.cleanup()
+
+    def _barrido(self, h, f):
+        b = self.bode
+        b.meta = b._datos_del_ensayo(f[0], f[-1], 10, len(f))
+        b.resultados = [(fi, 20 * math.log10(abs(hi)), math.degrees(cmath.phase(hi)), 2.0, 2 * abs(hi))
+                        for fi, hi in zip(f, h)]
+        b._resumen()
+
+    def _paginas(self, ruta):
+        datos = Path(ruta).read_bytes()
+        self.assertTrue(datos.startswith(b"%PDF"))
+        return datos.count(b"/Type /Page\n") + datos.count(b"/Type /Page\r") + \
+            datos.count(b"/Type /Page ") + datos.count(b"/Type /Page>")
+
+    def test_rl_con_modelo(self):
+        f = np.logspace(2, 6, 41)
+        s = 2j * np.pi * f
+        h = (25 + s * 1.06e-3) / (245 + s * 1.06e-3)
+        self._barrido(h, f)
+        self.assertIsNotNone(self.bode.modelo)
+        ruta = os.path.join(self._tmp.name, "rl.pdf")
+        self.assertTrue(self.bode.generar_informe(ruta, "RL de prueba", "notas\ncon dos líneas"))
+        self.assertGreaterEqual(self._paginas(ruta), 3)
+
+    def test_pocos_puntos_sin_modelo(self):
+        f = np.array([100.0, 1e3, 1e4])
+        self._barrido(h_rc(f), f)
+        self.assertIsNone(self.bode.modelo)
+        ruta = os.path.join(self._tmp.name, "rc.pdf")
+        self.assertTrue(self.bode.generar_informe(ruta))
+        self.assertGreaterEqual(self._paginas(ruta), 1)
+
+    def test_carpeta_inexistente_no_rompe(self):
+        f = np.logspace(2, 4, 9)
+        self._barrido(h_rc(f), f)
+        ruta = os.path.join(self._tmp.name, "no", "existe", "x.pdf")
+        self.assertFalse(self.bode.generar_informe(ruta))
+
+
+if __name__ == "__main__":
+    unittest.main()

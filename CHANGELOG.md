@@ -48,6 +48,14 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
   - lista **polos, ceros y Q**, la **ganancia en baja frecuencia** (por ejemplo la pérdida por la resistencia del alambre de una bobina), las **autorresonancias** y, si lo hay, el **piso de acople** entre CH1 y CH2, aclarando que ahí la medición ya no es del circuito;
   - dibuja la **curva del modelo** (punteada naranja) encima de la medida, se puede ocultar, y el CSV la incluye.
   - Probado con circuitos sintéticos: RC con piso de acople, RL pasaaltos y pasabajos con resistencia del alambre y autorresonancia, RLC pasabanda, 2º orden con acople (no inventa un rechazo) y puntos sueltos malos (los ignora).
+- **Bode: informe en PDF.** Con el botón **Informe PDF…** (se habilita al terminar un barrido) ponés un título y unas notas, elegís dónde guardarlo y la app arma un informe A4 que se abre solo:
+  - **Datos del ensayo**: fecha, placa, versiones de app y firmware, fuente (con el reloj del AD9833 si lo calibraste), rango y puntos del barrido, amplitud, entradas y puntas del osciloscopio, método y duración.
+  - **Resumen** con el tipo de respuesta y la frecuencia de corte, y una **tabla numerada de frecuencias características**: cortes a −3 dB, polos y ceros con su Q, su ubicación en el plano s y si caen dentro o fuera del rango medido o son del acople entre canales.
+  - La **función de transferencia ajustada** H(s) escrita con esas mismas frecuencias.
+  - **Ganancia y fase**: lo medido (puntos) contra el modelo (punteado), con la línea de −3 dB y las frecuencias de la tabla marcadas con su número.
+  - La **constelación de polos y ceros** en el plano s (escala logarítmica, con el rango medido sombreado y los mismos números de la tabla) y el **error del ajuste punto por punto**.
+  - Un **anexo** con todos los puntos medidos; los que el ajuste dejó de lado salen en rojo.
+  - Si el barrido tiene menos de 6 puntos no hay modelo, pero igual sale el informe con los datos y los gráficos.
 
 ### Corregido
 - **El trazo se congelaba al tocar Single o Autoset** (en las dos placas) y solo volvía reconectando la placa. Esos dos botones pedían una captura nueva mientras la anterior todavía estaba en curso, y el firmware la cortaba a la mitad: el ADC dual quedaba en *overrun* y no volvía a entregar datos. Ahora:

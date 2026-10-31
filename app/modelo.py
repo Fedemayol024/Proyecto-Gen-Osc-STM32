@@ -651,6 +651,41 @@ def analizar_modelo_bode(m: ModeloBode, f) -> dict:
             "error_db": m.error_db, "error_fase": m.error_fase, "orden": m.orden}
 
 
+def singularidades_bode(m: ModeloBode, f, analisis: dict | None = None) -> list[dict]:
+    """Polos y ceros del modelo, uno por fila (los pares complejos juntos), ordenados por
+    frecuencia: clase, frecuencia (Hz), Q (pares complejos), raíz s (rad/s; la de parte
+    imaginaria ≥ 0), región respecto del rango medido y si es el piso de acople."""
+    f = np.asarray(f, dtype=float)
+    fmin, fmax = f.min(), f.max()
+    piso = (analisis or {}).get("piso")
+    filas = []
+    for clase, raices in (("polo", m.polos), ("cero", m.ceros)):
+        vistos = []
+        for r in raices:
+            if any(abs(r - np.conj(v)) < 1e-6 * max(abs(r), 1) for v in vistos):
+                continue
+            vistos.append(r)
+            fr = abs(r) / (2 * np.pi)
+            par = abs(r.imag) > 1e-3 * abs(r) and abs(r.real) > 0
+            q = abs(r) / (2 * abs(r.real)) if par else None
+            if fr < fmin / 1.5:
+                region = "abajo del rango (≈ 0)"
+            elif fr > fmax * 1.5:
+                region = "arriba del rango"
+            else:
+                region = "en el rango"
+            filas.append({"clase": clase, "f": fr, "q": q, "par": par,
+                          "s": complex(r.real, abs(r.imag)), "region": region,
+                          "piso": clase == "cero" and piso is not None and abs(fr - piso) < 1e-6 * fr})
+    filas.sort(key=lambda x: x["f"])
+    return filas
+
+
+def ganancia_continua_bode(m: ModeloBode) -> complex:
+    """H(0) del modelo (K en H(s) = K·Π(1 − s/zᵢ)/Π(1 − s/pᵢ))."""
+    return complex(m.num[0] / m.den[0])
+
+
 # ---------------------------------------------------------------------------
 # Espectro (FFT): ventanas, promediado, piso de ruido y picos
 # ---------------------------------------------------------------------------

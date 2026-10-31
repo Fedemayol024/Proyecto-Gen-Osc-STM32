@@ -20,7 +20,12 @@ import time
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QCheckBox, QFileDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+import datetime as dt
+
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout,
+                               QLabel, QLineEdit, QPlainTextEdit, QVBoxLayout, QWidget)
 
 import modelo as M
 import widgets as W
@@ -107,6 +112,12 @@ class TabBode(QWidget):
         fila.addWidget(self.btn)
         fila.addWidget(W.boton("Exportar CSV", self._exportar))
         lay.addLayout(fila)
+        self.btn_pdf = W.boton("Informe PDF…", self._informe)
+        self.btn_pdf.setToolTip("Informe con los datos del ensayo, la tabla de frecuencias "
+                                "características, H(s), los gráficos medición vs. modelo y la "
+                                "constelación de polos y ceros.")
+        self.btn_pdf.setEnabled(False)
+        lay.addWidget(self.btn_pdf)
         self.lbl_prog = W.etiqueta_tenue("")
         lay.addWidget(self.lbl_prog)
         panel.addWidget(g)
@@ -210,6 +221,9 @@ class TabBode(QWidget):
                     not gen.dds_extendido():
                 self.v.estado("Para pasar de ~600 kHz hace falta el firmware nuevo del AD9833.", W.ALERTA)
                 return
+        self.meta = self._datos_del_ensayo(f1, f2, ppd, len(self.frecs))
+        self.t_inicio = time.monotonic()
+        self.btn_pdf.setEnabled(False)
         self.activo = True
         self.btn.setText("Detener")
         self.v.tab_osc._set_run(False)
@@ -323,6 +337,10 @@ class TabBode(QWidget):
         self._siguiente()
 
     def _terminar(self, msg: str):
+        if getattr(self, "meta", None) is not None and self.activo:
+            dur = time.monotonic() - getattr(self, "t_inicio", time.monotonic())
+            self.meta["Duración del barrido"] = f"{dur:.0f} s".replace(".", ",")
+            self.meta["Puntos medidos"] = f"{len(self.resultados)} de {len(self.frecs)}"
         self.activo = False
         self.esperando = False
         self.espera.stop()
@@ -331,7 +349,88 @@ class TabBode(QWidget):
         self.v.dueno_captura = None
         self.v.tab_gen.reenviar_todo()
         self._resumen()
+        self.btn_pdf.setEnabled(len(self.resultados) >= 2)
         self.v.estado(msg, W.TEXTO)
+
+    # ------------------------------------------------------------------ informe
+    def _datos_del_ensayo(self, f1, f2, ppd, n) -> dict:
+        v = self.v
+        osc = v.tab_osc
+        entradas = " · ".join(f"CH{c}: {osc.canales[c].entrada.currentText()} "
+                              f"{osc.canales[c].punta.currentText()}" for c in (1, 2))
+        if self.con_dds:
+            c = v.tab_gen.dds.c
+            ppm = (c.mclk / M.DDS_MCLK - 1) * 1e6
+            fuente = f"Módulo AD9833 · reloj {M.si(c.mclk, 'Hz', 9)}" + \
+                (" (nominal)" if abs(ppm) < 0.05 else f" ({ppm:+.1f} ppm, medido)".replace(".", ","))
+            vpp = M.dds_vpp(M.dds_cal_selector(c.cal), M.dds_porcentaje_cuantizado(c.amplitud))
+            amp = (f"≈ {M.si(vpp, 'V', 3)}pp (calibrada)" if vpp is not None
+                   else f"{c.amplitud:.0f} % del potenciómetro (sin calibrar)")
+            metodo = ("directo hasta ~fs/2,5; más arriba submuestreo con la frecuencia estimada "
+                      "de los datos de CH1")
+        else:
+            fuente = "Generador interno CH1 (DAC)"
+            amp = f"{M.si(self.amp.valor(), 'V', 3)}pp"
+            metodo = "directo, ajuste senoidal a la frecuencia exacta del generador"
+        d = {
+            "Fecha": dt.datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "Placa": M.nombre_placa(v.placa),
+            "Versión de la app": getattr(v, "version_app", ""),
+            "Firmware de la placa": v.disp.version or "",
+            "Fuente": fuente,
+            "Barrido": f"{M.si(f1, 'Hz', 4)} a {M.si(f2, 'Hz', 4)} · {ppd} puntos por década · {n} puntos",
+            "Amplitud": amp,
+            "Entradas del osciloscopio": entradas,
+            "Muestreo máximo": M.si(v.disp.info.get("osc_fsmax", 0), "S/s", 4),
+            "Método": metodo,
+        }
+        return {k: x for k, x in d.items() if x and not x.startswith("0 ")}
+
+    def _informe(self):
+        if len(self.resultados) < 2:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Informe PDF del Bode")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Título (qué circuito es):"))
+        e_tit = QLineEdit(getattr(self, "_ultimo_titulo", ""))
+        e_tit.setPlaceholderText("p. ej. RL pasaaltos · 1 mH + 220 Ω")
+        lay.addWidget(e_tit)
+        lay.addWidget(QLabel("Notas (opcional):"))
+        e_not = QPlainTextEdit(getattr(self, "_ultimas_notas", ""))
+        e_not.setPlaceholderText("Cómo estaba armado, qué se quería ver…")
+        W.tam(e_not, "setMinimumSize", 420, 90)
+        lay.addWidget(e_not)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("Elegir dónde guardar…")
+        bb.button(QDialogButtonBox.Cancel).setText("Cancelar")
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        self._ultimo_titulo, self._ultimas_notas = e_tit.text(), e_not.toPlainText()
+        nombre = "bode_" + dt.datetime.now().strftime("%Y-%m-%d_%H%M") + ".pdf"
+        ruta, _ = QFileDialog.getSaveFileName(self, "Guardar informe", nombre, "PDF (*.pdf)")
+        if not ruta:
+            return
+        if not ruta.lower().endswith(".pdf"):
+            ruta += ".pdf"
+        self.generar_informe(ruta, self._ultimo_titulo, self._ultimas_notas, abrir=True)
+
+    def generar_informe(self, ruta: str, titulo: str = "", notas: str = "", abrir: bool = False) -> bool:
+        import informe_bode
+        meta = dict(getattr(self, "meta", None) or {"Fecha": dt.datetime.now().strftime("%d/%m/%Y %H:%M")})
+        try:
+            paginas = informe_bode.generar(ruta, self.resultados, self.modelo, self.analisis, meta,
+                                           titulo, notas)
+        except OSError as e:
+            self.v.estado(f"No se pudo guardar {ruta}: {e.strerror or e}", W.ERROR)
+            return False
+        self.v.estado(f"Informe guardado ({paginas} páginas): {ruta}", W.OK)
+        if abrir:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(ruta))
+        return True
 
     def _resumen(self):
         if len(self.resultados) < 2:
