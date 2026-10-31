@@ -19,6 +19,12 @@ La app (`VERSION` en `app/main.py`) y el firmware (`INSTR_VERSION` en `instrumen
 
 _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan a una sección con número y fecha._
 
+---
+
+## [0.9.0 beta] · 2026-10-31 · Módulo AD9833 y Bode hasta 10 MHz
+
+> **Versión menor: hay que cargar el firmware nuevo en la placa.** El protocolo USB suma los comandos del AD9833 (`DDS`, `DDSA`, `DDSF`, `DDSCLK`, `DDSMOD`). Con el firmware 0.8.x la app avisa que la versión no coincide, y el panel del AD9833 y el Bode con el módulo no funcionan.
+
 ### Nuevo
 - **Módulo AD9833 (generador DDS externo).** Panel «Módulo AD9833» en la pestaña Generador: encender y apagar, forma (seno, triangular o cuadrada), frecuencia de 0,1 Hz a 12,5 MHz con paso de 0,093 Hz, y amplitud con el potenciómetro digital MCP41010 del módulo. La configuración se guarda y se reenvía al reconectar. Muestra la frecuencia confirmada por la placa.
 - Si el firmware de la placa no maneja el AD9833, la app no le manda esos comandos y avisa en el panel que hay que cargar el firmware nuevo.
@@ -91,11 +97,16 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
 ### Pendiente de probar
 - Single y Autoset con la placa real, con el firmware viejo (ya no debería congelarse, por el arreglo de la app) y con el nuevo.
 - Opciones gráficas en la notebook del compañero y en una pantalla con el escalado de Windows al 125 % / 150 %.
-- Primera prueba real del módulo: hecha. Seno de 5 MHz limpio, 1,48 Vpp a 80 % sobre ~2 V de continua (medido con un FNIRSI 2C53P).
-- Calibración de amplitud completa (0, 25, 50, 75 y 100 %) en PGA, y una medición en VOUT.
 - Cada modulación con la placa real: barrido (ver la respuesta de un filtro), FSK, PSK, ráfagas y AM.
 - Medir el reloj con el frecuencímetro (VOUT → D32).
-- Bode con el AD9833 en la placa real: un RC conocido (por ejemplo 1 kΩ + 1,5 nF ≈ 106 kHz) de 1 kHz a 5 MHz, comparando con la curva teórica.
+- Una medición de calibración en VOUT (la salida sin amplificar).
+- Todo lo del AD9833 en la NUCLEO-F429ZI de Jorge.
+
+**Ya probado en la NUCLEO-F767ZI:**
+- Primera prueba del módulo: seno de 5 MHz limpio, 1,48 Vpp a 80 % sobre ~2 V de continua (medido con un FNIRSI 2C53P).
+- Calibración de amplitud en PGA, paso a paso y automática con CH1.
+- Bode con el AD9833 hasta 10 MHz: RC pasabajos (4,7 kΩ + 10 nF), RL pasaaltos (1 mH + 220 Ω, se ven la resistencia del alambre y la autorresonancia en ~1,8 MHz) y RLC serie pasabanda (pico en 100 kHz, Q ≈ 1,6, y la autorresonancia de la bobina como rechazo en 1 MHz). El modelo ajustado queda a 0,3 dB y 1,6° de la medición.
+- Informe PDF desde la pestaña Bode.
 
 ---
 

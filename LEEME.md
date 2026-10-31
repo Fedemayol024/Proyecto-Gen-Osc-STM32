@@ -228,7 +228,7 @@ Son líneas de texto terminadas en `\n`.
 
 | Comando | Respuesta |
 |---|---|
-| `ID?` / `INFO?` | `INSTR-F767 v0.8.19` / `INFO gen_fs=… osc_fsmax=… wdg_ms=2000 reinicio=watchdog\|energia\|boton\|software\|otro` |
+| `ID?` / `INFO?` | `INSTR-F767 v0.9.0` / `INFO gen_fs=… osc_fsmax=… wdg_ms=2000 reinicio=watchdog\|energia\|boton\|software\|otro` |
 | `GTBL c 4096 suma` + 8192 bytes | `OK GTBL c` (tabla uint16 little-endian; la suma es la de los códigos) |
 | `GSET c frec fase hab reposo` | `OK GSET c frec_real` |
 | `GMOD c NO\|AM\|FM p fmod centro` | `OK GMOD c fmod_real` |

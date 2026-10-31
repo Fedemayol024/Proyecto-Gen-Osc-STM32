@@ -201,7 +201,7 @@ while True:
         cmd = p[0]
         try:
             if cmd == "ID?":
-                resp(f"INSTR-{PLACA} v0.8.19")
+                resp(f"INSTR-{PLACA} v0.9.0")
             elif cmd == "INFO?":
                 resp(f"INFO gen_fs={FS_GEN:.3f} osc_fsmax={FSMAX:.3f} tabla=4096 ventana=8192 cpu={CPU} wdg_ms=2000 reinicio=energia dds_mclk={round(dds['mclk'])} dds_mod=1")
             elif cmd == "GTBL":

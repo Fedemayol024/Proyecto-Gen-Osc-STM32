@@ -12,7 +12,7 @@
 
 #include <stdint.h>
 
-#define INSTR_VERSION "0.8.19"
+#define INSTR_VERSION "0.9.0"
 
 void instrumento_iniciar(void);
 void instrumento_lazo(void);
