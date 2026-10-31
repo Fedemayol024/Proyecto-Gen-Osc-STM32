@@ -6,8 +6,9 @@ Conexiones simuladas:
   OUT1 -> IN1 y OUT2 -> IN2   (modo "lazo", por defecto)
   OUT1 -> IN1 y OUT1 -> filtro RC (fc = 1 kHz) -> IN2   (modo "bode")
   salida PGA del AD9833 -> IN1                            (modo "dds")
+  AD9833 -> IN1 y AD9833 -> RC (fc = 100 kHz) -> IN2     (modo "ddsbode", Bode hasta MHz)
 Las salidas usan la etapa "Placa ±5 V" y las entradas el rango ±10 V.
-Uso: python nucleo_simulado.py [lazo|bode|dds] [registro.txt]
+Uso: python nucleo_simulado.py [lazo|bode|dds|ddsbode] [registro.txt]
 """
 import math
 import os
@@ -87,14 +88,16 @@ def rc(v: np.ndarray, fs: float, fc=1000.0) -> np.ndarray:
     return y
 
 
-def salida_dds(t: np.ndarray) -> np.ndarray:
-    """Salida PGA del módulo: ~2 V de continua y una ganancia casi lineal con el potenciómetro."""
+def salida_dds(t: np.ndarray, h: complex = 1.0) -> np.ndarray:
+    """Salida PGA del módulo: ~2 V de continua y una ganancia casi lineal con el potenciómetro.
+    'h' aplica una respuesta en frecuencia (módulo y fase) a la parte alterna."""
     if not dds["hab"]:
         return np.full(len(t), 2.0) + rng.normal(0, 0.002, len(t))
     vpp = 1.85 * (dds["amp"] / 255) ** 1.05
     vmed = 2.0 + 0.03 * dds["amp"] / 255
     f = dds["f"] * DDS_MCLK_REAL / dds["mclk"]
-    ph = 2 * np.pi * f * t + math.radians(dds["fase"])
+    vpp *= abs(h)
+    ph = 2 * np.pi * f * t + math.radians(dds["fase"]) + np.angle(h)
     if dds["forma"] == 0:
         onda = np.sin(ph)
     elif dds["forma"] == 1:
@@ -115,8 +118,16 @@ def capturar(n, pre, fs, fuente, nivel, flanco, hist):
         calent = int(min(200000, 8 * fs / (2 * math.pi * 1000.0))) + 10
     t0 = rng.uniform(0, 10)
     t = t0 + (np.arange(total + calent) - calent) / fs
-    v1 = vout(gen[1], t) if MODO != "dds" else salida_dds(t)
-    v2 = rc(v1, fs) if MODO == "bode" else vout(gen[2], t)
+    if MODO == "ddsbode":
+        # Respuesta analítica (vale arriba de Nyquist) y el muestreo del ADC, que filtra
+        # igual a los dos canales (~5 MHz de ancho de banda)
+        f = dds["f"] * DDS_MCLK_REAL / dds["mclk"]
+        adc_bw = 1 / (1 + 1j * f / 5e6)
+        v1 = salida_dds(t, adc_bw)
+        v2 = salida_dds(t, adc_bw / (1 + 1j * f / 100e3)) - 1.5
+    else:
+        v1 = vout(gen[1], t) if MODO != "dds" else salida_dds(t)
+        v2 = rc(v1, fs) if MODO == "bode" else vout(gen[2], t)
     c1, c2 = adc(v1[calent:]), adc(v2[calent:])
     disp = 2 if fuente == 0 else 0
     ini = 0

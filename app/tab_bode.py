@@ -1,10 +1,15 @@
 """Pestaña Bode: analizador de respuesta en frecuencia.
 
-El generador (CH1) excita el circuito con senoidales de frecuencia creciente.
-El osciloscopio mide al mismo tiempo la entrada del circuito (CH1) y la
-salida (CH2). Como las dos entradas se muestrean en el mismo instante y con
-la misma base de tiempo que el generador, la ganancia y la fase se obtienen
-ajustando una senoidal de frecuencia conocida a cada canal.
+La fuente (el generador interno CH1, o el módulo AD9833) excita el circuito con
+senoidales de frecuencia creciente. El osciloscopio mide al mismo tiempo la
+entrada del circuito (CH1) y la salida (CH2); la ganancia y la fase salen de
+ajustar una senoidal a cada canal.
+
+Con el generador interno la frecuencia se conoce exacta (comparte el reloj con
+el ADC). Con el AD9833 (reloj propio) se estima de los datos de CH1, y por
+encima de ~fs/2,5 se mide submuestreando: la señal aparece plegada a ~fs/4, y
+como los dos canales se muestrean en el mismo instante el cociente conserva la
+ganancia y la fase reales (ver modelo.respuesta_bode).
 """
 from __future__ import annotations
 
@@ -19,6 +24,10 @@ from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QVBoxLayout, QWi
 
 import modelo as M
 import widgets as W
+
+FUENTE_GEN = "Generador interno (CH1)"
+FUENTE_DDS = "Módulo AD9833"
+FUENTES = [FUENTE_GEN, FUENTE_DDS]
 
 
 class TabBode(QWidget):
@@ -64,22 +73,29 @@ class TabBode(QWidget):
         cont.setLayout(panel)
         raiz.addWidget(cont)
 
-        g, lay = W.grupo("Conexión")
-        lay.addWidget(W.etiqueta_tenue(
-            "Generador CH1 → entrada del circuito y también a la entrada CH1 del osciloscopio.\n"
-            "Salida del circuito → entrada CH2 del osciloscopio.\n"
-            "Masa común. La escala de las entradas se toma de la pestaña Osciloscopio."))
+        g, lay = W.grupo("Fuente y conexión")
+        self.fuente = W.combo(FUENTES, cfg.get("fuente", FUENTE_GEN))
+        self.fuente.setToolTip("El generador interno llega a ~100 kHz; el AD9833 hasta 10 MHz "
+                               "(arriba de ~600 kHz se mide submuestreando).")
+        lay.addWidget(W.fila("Fuente", self.fuente))
+        self.lbl_con = W.etiqueta_tenue("")
+        self.lbl_con.setWordWrap(True)
+        lay.addWidget(self.lbl_con)
         panel.addWidget(g)
 
         g, lay = W.grupo("Barrido")
-        self.f1 = W.EntradaSI("Hz", 1, 100e3, cfg.get("f1", 10.0), 4)
-        self.f2 = W.EntradaSI("Hz", 1, 100e3, cfg.get("f2", 100e3), 4)
+        self.f1 = W.EntradaSI("Hz", 1, M.BODE_DDS_FMAX, cfg.get("f1", 10.0), 4)
+        self.f2 = W.EntradaSI("Hz", 1, M.BODE_DDS_FMAX, cfg.get("f2", 100e3), 4)
         self.ppd = W.combo(["5", "10", "20", "40"], cfg.get("ppd", "10"))
         self.amp = W.EntradaSI("V", 0.01, 10, cfg.get("amp", 2.0), 4)
         lay.addWidget(W.fila("Desde", self.f1))
         lay.addWidget(W.fila("Hasta", self.f2))
         lay.addWidget(W.fila("Puntos por década", self.ppd))
-        lay.addWidget(W.fila("Amplitud (Vpp)", self.amp))
+        self.fila_amp = W.fila("Amplitud (Vpp)", self.amp)
+        lay.addWidget(self.fila_amp)
+        self.lbl_amp_dds = W.etiqueta_tenue("")
+        self.lbl_amp_dds.setWordWrap(True)
+        lay.addWidget(self.lbl_amp_dds)
         fila = QHBoxLayout()
         self.btn = W.boton("Iniciar barrido", self._alternar, primario=True)
         fila.addWidget(self.btn)
@@ -102,10 +118,54 @@ class TabBode(QWidget):
         self.espera = QTimer(self)
         self.espera.setSingleShot(True)
         self.espera.timeout.connect(self._capturar)
+        self.fuente.currentIndexChanged.connect(self._cambio_fuente)
+        self._cambio_fuente()
 
     def estado_config(self) -> dict:
         return {"f1": self.f1.valor(), "f2": self.f2.valor(), "ppd": self.ppd.currentText(),
-                "amp": self.amp.valor()}
+                "amp": self.amp.valor(), "fuente": self.fuente.currentText()}
+
+    @property
+    def con_dds(self) -> bool:
+        return self.fuente.currentText() == FUENTE_DDS
+
+    def _cambio_fuente(self, *_):
+        dds = self.con_dds
+        fmax = M.BODE_DDS_FMAX if dds else 100e3
+        for e in (self.f1, self.f2):
+            e.set_rango(1, fmax)
+            e.set_valor(min(e.valor(), fmax))
+        self.fila_amp.setVisible(not dds)
+        self.lbl_amp_dds.setVisible(dds)
+        if dds:
+            self.lbl_con.setText(
+                "PGA del AD9833 → entrada del circuito y A0 (CH1).\n"
+                "Salida del circuito → A1 (CH2). Masa común.\n"
+                "Arriba de ~600 kHz mide submuestreando.")
+            self.lbl_con.setToolTip(
+                "Hasta ~fs/2,5 se mide directo. Más arriba la señal se muestrea a una fs elegida "
+                "para que aparezca plegada a ~fs/4; como CH1 y CH2 se muestrean en el mismo "
+                "instante, el cociente conserva la ganancia y la fase reales.\n"
+                "Arriba de ~2 MHz pesan el ancho de banda del ADC y de la etapa de entrada: como "
+                "la entrada se mide con CH1, el cociente sigue valiendo mientras la señal se vea.")
+            self.actualizar_amplitud_dds()
+        else:
+            self.lbl_con.setToolTip("")
+            self.lbl_con.setText(
+                "Generador CH1 → entrada del circuito y también a la entrada CH1 del osciloscopio.\n"
+                "Salida del circuito → entrada CH2 del osciloscopio.\n"
+                "Masa común. La escala de las entradas se toma de la pestaña Osciloscopio.")
+        self.v.guardar_config_pronto()
+
+    def actualizar_amplitud_dds(self):
+        if not hasattr(self.v, "tab_gen"):
+            return
+        c = self.v.tab_gen.dds.c
+        vpp = M.dds_vpp(M.dds_cal_selector(c.cal), M.dds_porcentaje_cuantizado(c.amplitud))
+        cuanto = f"≈ {M.si(vpp, 'V', 3)}pp" if vpp is not None else f"{c.amplitud:.0f} % (sin calibrar)"
+        self.lbl_amp_dds.setText(f"Amplitud: la del panel AD9833 ({cuanto})")
+        self.lbl_amp_dds.setToolTip("Se cambia en Generador → Módulo AD9833. Elegila para que la "
+                                    "salida del circuito no se recorte en CH2.")
 
     # ------------------------------------------------------------------
     def _alternar(self):
@@ -123,11 +183,31 @@ class TabBode(QWidget):
         self.resultados = []
         self.c_mag.setData([], [])
         self.c_fase.setData([], [])
+        if self.con_dds:
+            gen = self.v.tab_gen
+            if not gen.dds_soportado():
+                self.v.estado("El firmware de la placa no maneja el AD9833: cargá el firmware nuevo.",
+                              W.ALERTA)
+                return
+            if f2 > self.v.disp.info.get("osc_fsmax", 1.6e6) * M.BODE_DIRECTO_MAX and \
+                    not gen.dds_extendido():
+                self.v.estado("Para pasar de ~600 kHz hace falta el firmware nuevo del AD9833.", W.ALERTA)
+                return
         self.activo = True
         self.btn.setText("Detener")
         self.v.tab_osc._set_run(False)
         self.v.cancelar_captura()
         self.v.dueno_captura = "bode"
+
+        if self.con_dds:
+            c = self.v.tab_gen.dds.c
+            self.mclk = c.mclk
+            if self.v.tab_gen.dds_extendido():
+                self.v.disp.enviar(f"DDSCLK {c.mclk:.1f}")
+                self.v.disp.enviar("DDSMOD NO")
+            self.v.disp.enviar(f"DDSA {M.dds_paso_amplitud(c.amplitud)}")
+            self._siguiente()
+            return
 
         # Tabla senoidal en CH1 con la salida y calibración elegidas en el generador
         pg1 = self.v.tab_gen.paneles[1]
@@ -147,20 +227,33 @@ class TabBode(QWidget):
             self._terminar("Barrido terminado.")
             return
         f = self.frecs[self.idx]
-        self.v.disp.enviar(f"GSET 1 {f:.6f} 0 1 {self.tabla.reposo}")
-        fs_gen = self.v.disp.info.get("gen_fs", 1e6)
-        inc = round(f / fs_gen * 2 ** 32)
-        self.f_real = inc * fs_gen / 2 ** 32
+        if self.con_dds:
+            self.v.disp.enviar(f"DDS {f:.4f} 0 1")
+            self.f_real = M.dds_frecuencia_real(f, self.mclk)
+        else:
+            self.v.disp.enviar(f"GSET 1 {f:.6f} 0 1 {self.tabla.reposo}")
+            fs_gen = self.v.disp.info.get("gen_fs", 1e6)
+            inc = round(f / fs_gen * 2 ** 32)
+            self.f_real = inc * fs_gen / 2 ** 32
+        self.submuestreo = False
         self.acum = []               # (H = salida/entrada, amplitud de entrada) de cada captura
         self.rep = 1
-        self.lbl_prog.setText(f"Punto {self.idx + 1} de {len(self.frecs)}: {M.si(f, 'Hz')}")
+        self.lbl_prog.setText(f"Punto {self.idx + 1} de {len(self.frecs)}: {M.si(f, 'Hz')}"
+                              + (" · AD9833" if self.con_dds else ""))
         # esperar que el circuito llegue al régimen permanente
         self.espera.start(int(max(60, 8000 / f)))
 
     def _capturar(self):
         fsmax = self.v.disp.info.get("osc_fsmax", 1.6e6)
         ventana = int(self.v.disp.info.get("ventana", 8192))
-        n, fs = M.captura_bode(self.f_real, fsmax, ventana)
+        if self.con_dds:
+            n, fs, self.submuestreo = M.captura_bode_dds(self.f_real, fsmax, ventana)
+            if self.submuestreo and not self.acum:
+                self.lbl_prog.setText(f"Punto {self.idx + 1} de {len(self.frecs)}: "
+                                      f"{M.si(self.f_real, 'Hz')} · AD9833, submuestreando a "
+                                      f"{M.si(fs, 'S/s', 4)}")
+        else:
+            n, fs = M.captura_bode(self.f_real, fsmax, ventana)
         self.v.pedir_captura("bode", n, 0, fs)
         self.esperando = True
         self.t_pedido = time.monotonic()
@@ -177,17 +270,17 @@ class TabBode(QWidget):
         osc = self.v.tab_osc
         v1 = osc.recta(1).volt(d["ch1"]) * osc.canales[1].factor
         v2 = osc.recta(2).volt(d["ch2"]) * osc.canales[2].factor
-        x1, _ = M.fasor_seno(v1, d["fs"], self.f_real)
-        x2, r2 = M.fasor_seno(v2, d["fs"], self.f_real)
-        a1 = abs(x1)
+        # Con el AD9833 la frecuencia se estima de CH1 (reloj propio) y puede estar submuestreada
+        h, a1, a2, r2 = M.respuesta_bode(v1, v2, d["fs"], self.f_real, estimar=self.con_dds)
         if a1 < 1e-4:
-            self._terminar("No llega señal a la entrada CH1: revisá la conexión del generador.")
+            fuente = "del AD9833 (salida PGA)" if self.con_dds else "del generador"
+            self._terminar(f"No llega señal a la entrada CH1: revisá la conexión {fuente}.")
             return
         # Se promedia H complejo (no el módulo): el ruido se cancela en vez de sumar amplitud.
         # La fase de CH1 de cada captura hace de referencia, así no importa dónde arrancó.
-        self.acum.append((x2 / x1, a1))
+        self.acum.append((h, a1))
         if len(self.acum) == 1:
-            self.rep = M.repeticiones_bode(abs(x2), r2, d["n"], d["n"] / d["fs"])
+            self.rep = M.repeticiones_bode(a2, r2, d["n"], d["n"] / d["fs"])
         if len(self.acum) < self.rep:
             self.lbl_prog.setText(f"Punto {self.idx + 1} de {len(self.frecs)}: "
                                   f"{M.si(self.f_real, 'Hz')} · salida chica, promediando "

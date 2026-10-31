@@ -398,6 +398,9 @@ ESQUEMAS = {
     "Módulo AD9833 (generador hasta 12,5 MHz)": [
         ("dds",),
     ],
+    "Bode con el AD9833 (hasta MHz)": [
+        ("bode_dds",),
+    ],
 }
 
 
@@ -539,6 +542,37 @@ class DibujoConexiones(QWidget):
                        "Directo a los pines solo se puede medir entre 0 y 3,3 V. Para señales "
                        "reales (negativas o más grandes) pasá por la etapa de entrada y elegí "
                        "en la app la «Entrada» que coincida con la llave de rango.")
+        elif tipo == "bode_dds":
+            pins = [(pin_n(0, 3), "A0 · Osc CH1 (entrada)", W.CH1), (pin_n(1, 3), "A1 · Osc CH2 (salida)", W.CH2),
+                    (pin_n(2, 3), "GND", C_GND)]
+            for pt, t, c in pins:
+                self._pin(p, pt, t, c, derecha=False)
+            dut = QRectF(x_pin + 250, nuc.top() + 60, 170, nuc.height() - 80)
+            self._bloque(p, dut, "Circuito a medir", "filtro, amplificador…", "#d29922")
+            xb = x_pin + 140                                  # bajada del AD9833 y empalme con A0
+            mod = QRectF(xb - 75, nuc.top() - 95, 150, 62)
+            self._bloque(p, mod, "AD9833", "salida PGA", C_DDS)
+            ent = QPointF(dut.left(), dut.top() + dut.height() * 0.2)
+            sal = QPointF(dut.left(), dut.top() + dut.height() * 0.55)
+            gnd = QPointF(dut.left(), dut.bottom() - 20)
+            self._cable(p, [QPointF(xb, mod.bottom()), QPointF(xb, ent.y()), ent], C_DDS)
+            self._cable(p, [pins[0][0], QPointF(xb, pins[0][0].y())], C_DDS)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(C_DDS))
+            p.drawEllipse(QPointF(xb, pins[0][0].y()), 4.5, 4.5)
+            self._cable(p, [pins[1][0], QPointF(xb + 60, pins[1][0].y()), QPointF(xb + 60, sal.y()), sal], W.CH2)
+            self._cable(p, [pins[2][0], QPointF(xb + 85, pins[2][0].y()), QPointF(xb + 85, gnd.y()), gnd], C_GND)
+            p.setPen(QColor(W.TEXTO))
+            p.setFont(QFont("Segoe UI", 9))
+            p.drawText(QPointF(dut.left() + 6, ent.y() + 4), "entrada")
+            p.drawText(QPointF(dut.left() + 6, sal.y() + 4), "salida")
+            p.drawText(QPointF(dut.left() + 6, gnd.y() + 4), "masa")
+            self._nota(p, QRectF(dut.right() + 20, nuc.top(), w - dut.right() - 40, nuc.height()),
+                       "La salida PGA del AD9833 alimenta el circuito y también va a A0, que mide lo "
+                       "que realmente entra. A1 mide la salida. Masa común con la Nucleo y el módulo.\n\n"
+                       "El módulo lleva además sus 6 cables de control (ver «Módulo AD9833»).\n\n"
+                       "En Bode elegí Fuente: Módulo AD9833. Arriba de ~600 kHz mide submuestreando; "
+                       "las señales tienen que quedar en el rango de la entrada que uses.")
         elif tipo == "dds":
             filas = [("+3V3", "VCC", C_3V3), ("GND", "GND", C_GND), ("D45 · PC10", "CLK", C_DDS),
                      ("D47 · PC12", "DAT", C_DDS), ("D48 · PD2", "FSY", C_DDS), ("D49 · PG2", "CS", C_DDS)]

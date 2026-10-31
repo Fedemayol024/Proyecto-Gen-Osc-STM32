@@ -620,6 +620,9 @@ class PanelDDS(QWidget):
             texto = "<br>".join(f"<span style='color:{W.ALERTA}'>{a}</span>" for a in avisos) + "<br>" + texto
         self.lbl_info.setText(texto)
         self.lbl_mod.setText(self._texto_modulacion())
+        bode = getattr(self.tab.v, "tab_bode", None)      # la pestaña Bode muestra esta amplitud
+        if bode is not None and bode.con_dds:
+            bode.actualizar_amplitud_dds()
 
     def _texto_modulacion(self) -> str:
         c = self.c

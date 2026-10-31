@@ -35,6 +35,14 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
 - **Dibujo de pines más claro:** cada cable de rótulo va por su propio carril, sin cruzarse ni pisarse con los demás. Los pines de la columna de adentro salen por el hueco entre filas, así no pasan por encima del pin de al lado (por ejemplo GND y FSY en CN8).
 - **Resaltado al pasar el mouse:** en Placa → Pines, al pasar el mouse por un rótulo o por su pin, ese cable se marca más grueso, con un halo y un anillo en el pin, y los demás se atenúan. Así se sigue fácil a dónde va cada uno.
 
+- **Bode con el AD9833, hasta 10 MHz.** En la pestaña Bode hay un selector de **Fuente**: el generador interno (hasta ~100 kHz, como antes) o el **Módulo AD9833**. Con el AD9833:
+  - hasta ~600 kHz mide directo; más arriba, **submuestreando**: elige la frecuencia de muestreo para que la señal aparezca plegada a ~fs/4 (lejos de la continua y de fs/2) y, como CH1 y CH2 se muestrean en el mismo instante, el cociente salida/entrada conserva la ganancia y la fase reales (con el alias «dado vuelta», corrige el signo de la fase);
+  - la frecuencia se **estima de los datos** de CH1 (pico de la FFT + máximo del ajuste senoidal), así un error de algunas ppm del cristal del módulo no desfasa el ajuste;
+  - usa la amplitud del panel AD9833 y, al terminar, vuelve a dejar el módulo como estaba (con su modulación);
+  - mantiene el promedio adaptativo cuando la salida es chica.
+  - Verificado: con datos sintéticos (RC de 100 kHz, cristal corrido 20 ppm, ruido y cuantización del ADC) el error es menor a 0,1 dB y 1° de 1 kHz a 9 MHz; con el Nucleo simulado (que además filtra los dos canales como el muestreo del ADC), barrido de 1 kHz a 5 MHz en ~3 s con error máximo de 0,08 dB / 1,1° (F767) y 0,17 dB / 1,4° (F429).
+- **Placa → Conexiones:** esquema «Bode con el AD9833 (hasta MHz)».
+
 ### Corregido
 - **El trazo se congelaba al tocar Single o Autoset** (en las dos placas) y solo volvía reconectando la placa. Esos dos botones pedían una captura nueva mientras la anterior todavía estaba en curso, y el firmware la cortaba a la mitad: el ADC dual quedaba en *overrun* y no volvía a entregar datos. Ahora:
   - la app espera a que llegue la captura en camino antes de arrancar el Single o el Autoset (como ya hacía RUN);
@@ -64,7 +72,7 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
 - Calibración de amplitud completa (0, 25, 50, 75 y 100 %) en PGA, y una medición en VOUT.
 - Cada modulación con la placa real: barrido (ver la respuesta de un filtro), FSK, PSK, ráfagas y AM.
 - Medir el reloj con el frecuencímetro (VOUT → D32).
-- Bode con el AD9833 por encima de 100 kHz (necesita muestreo coherente; queda para después).
+- Bode con el AD9833 en la placa real: un RC conocido (por ejemplo 1 kΩ + 1,5 nF ≈ 106 kHz) de 1 kHz a 5 MHz, comparando con la curva teórica.
 
 ---
 

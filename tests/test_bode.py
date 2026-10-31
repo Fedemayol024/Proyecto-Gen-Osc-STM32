@@ -142,3 +142,58 @@ class TestPuntoDelBarrido(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBodeSubmuestreo(unittest.TestCase):
+    """Bode con el AD9833: por encima de Nyquist se mide submuestreando."""
+
+    def test_alias_con_signo(self):
+        self.assertAlmostEqual(M.alias(1e3, 1e6), 1e3)
+        self.assertAlmostEqual(M.alias(1.25e6, 1e6), 0.25e6)
+        self.assertAlmostEqual(M.alias(0.75e6, 1e6), -0.25e6)     # llega dado vuelta
+        self.assertAlmostEqual(M.alias(3.3e6, 1.3e6), -0.6e6)       # 3,3 − 3·1,3 = −0,6 MHz
+        for f in np.linspace(1e3, 10e6, 97):
+            a = M.alias(f, 1.5e6)
+            self.assertTrue(-0.75e6 < a <= 0.75e6)
+            self.assertAlmostEqual(((f - a) / 1.5e6) % 1, 0, places=6)
+
+    def test_elige_fs_con_el_alias_cerca_de_un_cuarto(self):
+        for f in (700e3, 1e6, 2.2e6, 5e6, 9.9e6):
+            with self.subTest(f=f):
+                fs = M.fs_submuestreo(f, FS_MAX)
+                self.assertLessEqual(fs, FS_MAX)
+                self.assertGreaterEqual(fs, FS_MAX * 0.5)
+                self.assertAlmostEqual(abs(M.alias(f, fs)) / fs, 0.25, delta=0.02)
+
+    def test_directo_hasta_nyquist_y_submuestreo_arriba(self):
+        n, fs, sub = M.captura_bode_dds(100e3, FS_MAX)
+        self.assertFalse(sub)
+        self.assertEqual(fs, FS_MAX)
+        n, fs, sub = M.captura_bode_dds(2e6, FS_MAX)
+        self.assertTrue(sub)
+        self.assertEqual(n, 8192)
+
+    def test_estima_la_frecuencia_de_los_datos(self):
+        fs, n = 1.4e6, 8192
+        t = np.arange(n) / fs
+        f = 351_234.5
+        v = 1 + 0.5 * np.sin(2 * np.pi * f * t + 1) + np.random.default_rng(2).normal(0, 0.01, n)
+        self.assertAlmostEqual(M.estimar_frecuencia(v, fs, 351_100), f, delta=0.5)
+
+    def test_rc_hasta_mhz_con_cristal_desviado(self):
+        rng = np.random.default_rng(0)
+        for f in (1e3, 300e3, 700e3, 1.5e6, 3e6, 5e6, 9e6):
+            with self.subTest(f=f):
+                n, fs, _ = M.captura_bode_dds(f, FS_MAX)
+                f_real = f * (1 + 20e-6)                 # el AD9833 sale corrido 20 ppm
+                t = np.arange(n) / fs + rng.uniform(0, 1)
+                h = 1 / (1 + 1j * f_real / 100e3)
+                v1 = 2.0 + 0.9 * np.sin(2 * np.pi * f_real * t + 0.4) + rng.normal(0, 0.004, n)
+                v2 = 1.0 + 0.9 * abs(h) * np.sin(2 * np.pi * f_real * t + 0.4 + cmath.phase(h)) \
+                    + rng.normal(0, 0.004, n)
+                v1 = np.round(v1 / 3.3 * 4095) * 3.3 / 4095   # cuantización del ADC
+                v2 = np.round(v2 / 3.3 * 4095) * 3.3 / 4095
+                hm, a1, _, _ = M.respuesta_bode(v1, v2, fs, f)
+                self.assertAlmostEqual(a1, 0.9, delta=0.01)
+                self.assertAlmostEqual(20 * math.log10(abs(hm)), 20 * math.log10(abs(h)), delta=0.1)
+                self.assertAlmostEqual(math.degrees(cmath.phase(hm / h)), 0, delta=1.0)

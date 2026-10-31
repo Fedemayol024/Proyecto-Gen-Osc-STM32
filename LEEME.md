@@ -6,7 +6,7 @@ Una sola app de PC y una placa **NUCLEO-F767ZI** o **NUCLEO-F429ZI** forman un p
 |---|---|---|
 | **Generador de 2 canales** | DAC de 12 bits a 1 MS/s, hasta ~100 kHz útiles. Formas: seno, cuadrada (ciclo útil), triangular (simetría), sierra, continua, ruido y arbitraria (desde CSV). Fase relativa exacta entre canales. Modulación **AM/FM** y **barrido** lineal o logarítmico. | PA4 (D24), PA5 (D13) |
 | **Osciloscopio de 2 canales** | ADC de 12 bits, los dos canales muestreados en el mismo instante, hasta ~1,6 MS/s. Disparo por flanco y nivel (Auto / Normal / Único), mediciones automáticas, cursores, **persistencia tipo fósforo**, **FFT con análisis de picos** (THD, SNR, eliminación del piso de ruido), modo **XY**, autoset, exportación a CSV y PNG. | PA3 (A0), PC0 (A1) |
-| **Analizador de Bode** | Barre la frecuencia con el generador y mide ganancia (dB) y fase (°) del circuito. Detecta la frecuencia de corte a −3 dB. | Generador + osciloscopio |
+| **Analizador de Bode** | Barre la frecuencia con el generador (hasta ~100 kHz) o con el **módulo AD9833 (hasta 10 MHz)** y mide ganancia (dB) y fase (°) del circuito. Detecta la frecuencia de corte a −3 dB. | Generador o AD9833 + osciloscopio |
 | **Frecuencímetro** | Conteo de flancos (hasta decenas de MHz) o método recíproco (frecuencias bajas con muchas cifras). Elige el método solo. | PA0 (D32) |
 | **PWM complementario** | Hasta decenas de MHz, ciclo útil y **tiempo muerto** ajustables (ns), para puentes H e inversores. | PE9 (D6), PE8 (D42) |
 
@@ -137,7 +137,7 @@ Para crear el `.exe`, hacé doble clic en `app/build_exe.bat`. Necesita Python 3
      - *Procesamiento:* ventana (Blackman-Harris, Flat-top, Hann, Hamming, Rectangular), **promediado** de 4 a 64 cuadros (el ruido se vuelve parejo y desaparecen los micropicos) y **Eliminar piso de ruido** (suave o fuerte): estima el piso con una mediana móvil y lo resta, así quedan solo las componentes reales.
      - *Detección:* umbral absoluto (también se arrastra la línea punteada del gráfico), cuánto tiene que sobresalir del piso, separación mínima y máximo de picos. Los picos se marcan y numeran en el gráfico.
      - *Mediciones:* fundamental, THD, SNR, SINAD, ENOB, piso y densidad de ruido, RBW, y una tabla de picos con nivel (dBV y V eficaces), dBc y número de armónico. Se exporta a CSV.
-4. **Bode:** conectá Generador CH1 → entrada del circuito y IN1, y la salida del circuito → IN2. Elegí el rango y tocá *Iniciar barrido*.
+4. **Bode:** conectá Generador CH1 → entrada del circuito y IN1, y la salida del circuito → IN2. Elegí el rango y tocá *Iniciar barrido*. Con **Fuente: Módulo AD9833**, la salida PGA del módulo va a la entrada del circuito y a A0 (ver Placa → Conexiones → «Bode con el AD9833»); la amplitud es la del panel AD9833 del Generador y el rango llega a 10 MHz.
 5. **Frecuencímetro y PWM:** lectura grande con el método usado. El PWM muestra los valores reales obtenidos.
 6. **Calibración** (una vez):
    - **Salidas:** con multímetro, dos puntos por canal.
@@ -248,6 +248,7 @@ Son líneas de texto terminadas en `\n`.
 - **Si la placa se cuelga o se reinicia:** el watchdog la reinicia sola en 2 s. La app detecta que se cortó el USB, la busca durante 20 s, se reconecta, vuelve a mandar la configuración del generador y avisa en la barra de estado si el reinicio fue por el watchdog. En la pestaña **Placa** se ve la causa del último reinicio. Durante la reconexión el botón dice *Cancelar*.
 - **Rangos de los pines directos:** las entradas del ADC aceptan **solo 0 a 3,3 V**. Para cualquier otra señal usá la etapa de entrada.
 - **Ancho de banda:** el osciloscopio llega a ~1,6 MS/s, así que hasta ~150–200 kHz se ven bien. El generador, hasta ~100 kHz.
-- **Bode:** queda bien de unos pocos Hz hasta ~100 kHz. Las frecuencias bajas tardan más, porque espera el régimen permanente y captura al menos 8 períodos.
+- **Bode:** con el generador interno queda bien de unos pocos Hz hasta ~100 kHz. Las frecuencias bajas tardan más, porque espera el régimen permanente y captura al menos 8 períodos.
+- **Bode con el AD9833:** hasta ~600 kHz mide directo; más arriba, **submuestreando**: elige una frecuencia de muestreo para que la señal aparezca plegada a ~fs/4 y, como CH1 y CH2 se muestrean en el mismo instante, el cociente conserva la ganancia y la fase reales. La frecuencia se estima de los datos de CH1 (el AD9833 tiene su propio reloj). En simulación, con un RC de 100 kHz, el error queda por debajo de 0,2 dB y 1,5° hasta 5 MHz. En la placa real, arriba de ~2 MHz pesan el ancho de banda del ADC y de la etapa de entrada; como la entrada se mide con CH1, el cociente sigue valiendo mientras la señal se vea.
 - **Señales lentas:** con bases de tiempo de 50 ms/div o más, en modo Auto se captura sin buscar disparo para no esperar de más.
 - **Mantenimiento de la caché:** si en el futuro agregás tus propios buffers DMA, usá `cache_limpiar` y `cache_invalidar`.

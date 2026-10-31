@@ -344,6 +344,107 @@ def repeticiones_bode(amp: float, residuo: float, n: int, t_captura: float,
 
 
 # ---------------------------------------------------------------------------
+# Bode con una fuente externa (AD9833): submuestreo y frecuencia estimada de los datos
+# ---------------------------------------------------------------------------
+# Arriba de ~fs/2,5 el ADC no puede seguir la señal, pero muestreándola a una fs elegida
+# aparece «plegada» en f_alias = f − k·fs. Como CH1 y CH2 se muestrean en el mismo instante,
+# el cociente salida/entrada del alias conserva la ganancia y la fase reales del circuito.
+# El AD9833 tiene su propio reloj (no está sincronizado con el de la placa): por eso la
+# frecuencia se estima de los datos de CH1 en vez de suponerla exacta.
+BODE_DIRECTO_MAX = 1 / 2.5          # hasta fs_max/2,5 se mide directo (≥ 2,5 muestras/período)
+BODE_ALIAS_OBJ = 0.25               # el alias se ubica cerca de fs/4 (lejos de 0 y de fs/2)
+BODE_DDS_FMAX = 10e6
+
+
+def alias(f: float, fs: float) -> float:
+    """Frecuencia aparente (con signo) de una senoidal de f muestreada a fs: en (−fs/2, fs/2].
+    Negativa = el espectro llega «dado vuelta» (la fase medida sale con el signo cambiado)."""
+    a = f - round(f / fs) * fs
+    if a <= -fs / 2:
+        a += fs
+    return a
+
+
+def fs_submuestreo(f: float, fs_max: float, fs_min: float | None = None,
+                   candidatos: int = 600) -> float:
+    """fs (≤ fs_max) para que el alias de f quede cerca de fs/4: lejos de 0 (no se puede
+    separar de la continua) y de fs/2 (ahí el signo de la fase es ambiguo)."""
+    fs_min = fs_min or fs_max * 0.5
+    mejor, puntaje = fs_max, 1e9
+    for fs in np.linspace(fs_max, fs_min, candidatos):
+        r = abs(alias(f, fs)) / fs
+        p = abs(r - BODE_ALIAS_OBJ) + 0.02 * (1 - fs / fs_max)      # preferir fs alta
+        if p < puntaje:
+            mejor, puntaje = float(fs), p
+    return mejor
+
+
+def estimar_frecuencia(v: np.ndarray, fs: float, f_aprox: float, bins: float = 4.0) -> float:
+    """Frecuencia de la senoidal de v cerca de f_aprox (≥ 0): pico de la FFT con ventana de
+    Hann e interpolación, y después el máximo de la amplitud del ajuste senoidal."""
+    v = np.asarray(v, dtype=float)
+    n = len(v)
+    if n < 16:
+        return f_aprox
+    espectro = np.abs(np.fft.rfft((v - v.mean()) * np.hanning(n)))
+    df = fs / n
+    k0 = f_aprox / df
+    lo, hi = max(1, int(math.floor(k0 - bins))), min(len(espectro) - 2, int(math.ceil(k0 + bins)))
+    if hi <= lo:
+        return f_aprox
+    k = lo + int(np.argmax(espectro[lo:hi + 1]))
+    a, b, c = np.log(espectro[k - 1:k + 2] + 1e-30)
+    den = a - 2 * b + c
+    delta = 0.5 * (a - c) / den if den < 0 else 0.0
+    f = (k + max(-0.5, min(0.5, delta))) * df
+
+    def amplitud(x):
+        return abs(fasor_seno(v, fs, x)[0])
+
+    izq, der = f - 0.6 * df, f + 0.6 * df                  # sección áurea sobre ±0,6 bin
+    g = (math.sqrt(5) - 1) / 2
+    x1, x2 = der - g * (der - izq), izq + g * (der - izq)
+    a1, a2 = amplitud(x1), amplitud(x2)
+    for _ in range(18):
+        if a1 > a2:
+            der, x2, a2 = x2, x1, a1
+            x1 = der - g * (der - izq)
+            a1 = amplitud(x1)
+        else:
+            izq, x1, a1 = x1, x2, a2
+            x2 = izq + g * (der - izq)
+            a2 = amplitud(x2)
+    return (izq + der) / 2
+
+
+def respuesta_bode(v1: np.ndarray, v2: np.ndarray, fs: float, f: float,
+                   estimar: bool = True) -> tuple[complex, float, float, float]:
+    """H = salida/entrada a la frecuencia f (real, aunque esté por encima de Nyquist).
+    Devuelve (H, amplitud de entrada, amplitud de salida, residuo del ajuste de salida).
+    Con 'estimar', la frecuencia aparente se ajusta a los datos de CH1."""
+    a = alias(f, fs)
+    fa = abs(a)
+    if estimar:
+        fa = estimar_frecuencia(v1, fs, fa)
+    x1, _ = fasor_seno(v1, fs, fa)
+    x2, r2 = fasor_seno(v2, fs, fa)
+    if abs(x1) < 1e-12:
+        return 0j, 0.0, abs(x2), r2
+    h = x2 / x1
+    if a < 0:                       # alias dado vuelta: la fase sale con el signo cambiado
+        h = h.conjugate()
+    return h, abs(x1), abs(x2), r2
+
+
+def captura_bode_dds(f: float, fs_max: float, ventana: int = 8192) -> tuple[int, float, bool]:
+    """(n, fs, submuestreo) para medir f con el AD9833."""
+    if f <= fs_max * BODE_DIRECTO_MAX:
+        n, fs = captura_bode(f, fs_max, ventana)
+        return n, fs, False
+    return ventana, fs_submuestreo(f, fs_max), True
+
+
+# ---------------------------------------------------------------------------
 # Espectro (FFT): ventanas, promediado, piso de ruido y picos
 # ---------------------------------------------------------------------------
 VENTANAS = ["Hann", "Hamming", "Blackman-Harris", "Flat-top", "Rectangular"]

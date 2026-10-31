@@ -609,6 +609,51 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         self.assertAlmostEqual(d.c.mclk, 25.0004e6, delta=1)
         self.assertIn("revisá la conexión", self.v.statusBar().currentMessage())
 
+    # --------------------------------------------------------------- Bode con el AD9833
+    def test_bode_con_ad9833_hasta_mhz(self):
+        from types import SimpleNamespace
+        enviados = self._dds_conectado({"dds_mclk": 25e6, "dds_mod": 1, "osc_fsmax": 27e6 / 17,
+                                        "ventana": 8192})
+        bode, osc, gen = self.v.tab_bode, self.v.tab_osc, self.v.tab_gen
+        gen.dds.mod.setCurrentText("AM")                          # lo que había en el panel
+        bode.fuente.setCurrentText("Módulo AD9833")
+        self.assertFalse(bode.fila_amp.isVisibleTo(bode))         # la amplitud es la del panel
+        self.assertIn("panel AD9833", bode.lbl_amp_dds.text())
+        bode.f1.set_valor(10e3)
+        bode.f2.set_valor(5e6)
+        bode.ppd.setCurrentText("5")
+        bode.espera = SimpleNamespace(start=lambda ms: bode._capturar(), stop=lambda: None)
+        pedidos = []
+        self.v.pedir_captura = lambda dueno, n, pre, fs, *a: pedidos.append((n, fs))
+        rng = np.random.default_rng(5)
+        bode._alternar()
+        self.assertIn("DDSMOD NO", enviados)
+        vueltas = 0
+        while bode.activo and vueltas < 200:
+            vueltas += 1
+            n, fs = pedidos[-1]
+            f_pedida = float([e for e in enviados if e.startswith("DDS ")][-1].split()[1])
+            f = M.dds_frecuencia_real(f_pedida) * (1 + 15e-6)    # cristal real del módulo
+            t = np.arange(n) / fs + rng.uniform(0, 1)
+            h = 1 / (1 + 1j * f / 100e3)
+            v1 = 2.0 + 0.9 * np.sin(2 * np.pi * f * t)
+            v2 = 0.5 + 0.9 * abs(h) * np.sin(2 * np.pi * f * t + np.angle(h))
+            cod = [np.clip(np.rint(osc.recta(c).codigo(v / osc.canales[c].factor)), 0, 4095).astype(np.uint16)
+                   for c, v in ((1, v1), (2, v2))]
+            bode.al_recibir({"n": n, "pre": 0, "fs": fs, "disparado": 2, "ch1": cod[0], "ch2": cod[1]})
+        self.assertFalse(bode.activo)
+        res = np.array(bode.resultados)
+        self.assertEqual(len(res), 14)                             # 10 kHz → 5 MHz (2,7 décadas), 5 por década
+        self.assertGreater(res[-1, 0], 4.9e6)
+        self.assertTrue(any(fs < 27e6 / 17 * 0.99 for _, fs in pedidos))   # hubo submuestreo
+        h = 1 / (1 + 1j * res[:, 0] / 100e3)
+        np.testing.assert_allclose(res[:, 1], 20 * np.log10(abs(h)), atol=0.3)
+        np.testing.assert_allclose(res[:, 2], np.degrees(np.angle(h)), atol=2.0)
+        self.assertIn("Frecuencia de corte", bode.lbl_res.text())
+        # al terminar vuelve lo del panel (con su modulación)
+        ultimo_bode = max(i for i, e in enumerate(enviados) if e.startswith("DDS 5"))
+        self.assertIn("DDSMOD AM 0.5000 10.0000", enviados[ultimo_bode:])
+
     # --------------------------------------------------------------- reconexión / watchdog
     def test_reconexion_automatica_tras_un_reinicio(self):
         abiertos = []
