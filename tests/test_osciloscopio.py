@@ -337,6 +337,25 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         self._llega(enviados)
         self.assertEqual(len(enviados), antes)                     # no pide más
 
+    # --------------------------------------------------------------- pestaña Placa
+    def test_resaltar_rotulo_y_pin_con_el_mouse(self):
+        from PySide6.QtCore import QPoint
+        from PySide6.QtTest import QTest
+        self.v.resize(1366, 860)
+        self.v.show()
+        self.v.tabs.setCurrentWidget(self.v.tab_placa)
+        d = self.v.tab_placa.dib_placa
+        d.grab()                                          # dibuja y arma las zonas
+        zonas = {}
+        for r, k in d._zonas:
+            zonas.setdefault(k, []).append(r)
+        self.assertIn("CN8-12", zonas)                    # FSY del AD9833
+        for r in zonas["CN8-12"]:                         # el rótulo y el pin
+            QTest.mouseMove(d, QPoint(int(r.center().x() * W.ESCALA), int(r.center().y() * W.ESCALA)))
+            self.assertEqual(d.resaltado, "CN8-12")
+            QTest.mouseMove(d, QPoint(int(d.width() / 2), 5))   # fuera de todo
+            self.assertIsNone(d.resaltado)
+
     # --------------------------------------------------------------- AD9833
     def test_ad9833_envia_comandos_solo_con_firmware_que_lo_soporta(self):
         enviados = []

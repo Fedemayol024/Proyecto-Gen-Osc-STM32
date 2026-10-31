@@ -24,6 +24,7 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
 - Si el firmware de la placa no maneja el AD9833, la app no le manda esos comandos y avisa en el panel que hay que cargar el firmware nuevo.
 - **Pestaña Placa:** esquema «Módulo AD9833» en Conexiones (los 6 cables de CN8 y la salida PGA), sus pines marcados en el dibujo de la placa (D45, D47, D48, D49) y una sección con sus capacidades.
 - **Dibujo de pines más claro:** cada cable de rótulo va por su propio carril, sin cruzarse ni pisarse con los demás. Los pines de la columna de adentro salen por el hueco entre filas, así no pasan por encima del pin de al lado (por ejemplo GND y FSY en CN8).
+- **Resaltado al pasar el mouse:** en Placa → Pines, al pasar el mouse por un rótulo o por su pin, ese cable se marca más grueso, con un halo y un anillo en el pin, y los demás se atenúan. Así se sigue fácil a dónde va cada uno.
 
 ### Corregido
 - **El trazo se congelaba al tocar Single o Autoset** (en las dos placas) y solo volvía reconectando la placa. Esos dos botones pedían una captura nueva mientras la anterior todavía estaba en curso, y el firmware la cortaba a la mitad: el ADC dual quedaba en *overrun* y no volvía a entregar datos. Ahora:

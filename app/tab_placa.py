@@ -156,6 +156,10 @@ class DibujoPlaca(QWidget):
         super().__init__()
         self.placa = M.PLACA_POR_DEFECTO
         W.tam(self, "setMinimumSize", 900, 700)
+        # Resaltado al pasar el mouse por un rótulo o por su pin
+        self.setMouseTracking(True)
+        self.resaltado: str | None = None      # "CN8-12", etc.
+        self._zonas: list = []                 # (rectángulo en coordenadas del dibujo, clave)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     def set_placa(self, placa):
@@ -234,6 +238,7 @@ class DibujoPlaca(QWidget):
         self._conector(p, "CN9", CN9, x0 + 5 * mm, y0 + 62 * mm, paso, rot_izq)
         self._conector(p, "CN7", CN7, x0 + ancho - 5 * mm - 2 * paso, y0 + 34 * mm, paso, rot_der)
         self._conector(p, "CN10", CN10, x0 + ancho - 5 * mm - 2 * paso, y0 + 66 * mm, paso, rot_der)
+        self._zonas = []
         self._rotulos(p, rot_izq, izquierda=True)
         self._rotulos(p, rot_der, izquierda=False)
         p.end()
@@ -286,6 +291,7 @@ class DibujoPlaca(QWidget):
         signo = -1 if izquierda else 1
         ultimo = borde + signo * (n - 1) * self.CARRIL          # carril más de afuera
         y_libre = -1e9
+        items = []
         for k, (salida, c, (rot, pin, funcion, color), cn) in enumerate(lista):
             y = max(salida.y() - self.ALTO_ROT / 2, y_libre)
             y_libre = y + self.ALTO_ROT + 6
@@ -301,18 +307,75 @@ class DibujoPlaca(QWidget):
             path.lineTo(QPointF(carril, salida.y()))
             path.lineTo(QPointF(carril, ancla.y()))
             path.lineTo(ancla)
-            p.setPen(QPen(QColor(color), 1.6))
+            items.append((cn, path, caja, c, rot, pin, funcion, color))
+            r = self._paso * 0.6
+            self._zonas.append((caja, cn))
+            self._zonas.append((QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), cn))
+        # Primero los comunes (más tenues si hay uno resaltado), al final el resaltado
+        items.sort(key=lambda it: it[0] == self.resaltado)
+        for cn, path, caja, c, rot, pin, funcion, color in items:
+            self._dibujar_rotulo(p, path, caja, c, rot, pin, funcion, color, cn)
+
+    def _dibujar_rotulo(self, p, path, caja, c, rot, pin, funcion, color, cn):
+        activo = self.resaltado == cn
+        apagado = self.resaltado is not None and not activo
+        col = QColor(color)
+        if apagado:
+            col.setAlpha(70)
+        if activo:                                   # halo debajo del cable
+            halo = QColor(color)
+            halo.setAlpha(70)
+            p.setPen(QPen(halo, 8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
             p.setBrush(Qt.NoBrush)
             p.drawPath(path)
+        p.setPen(QPen(col, 3.0 if activo else 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(path)
+        if activo:                                   # anillo en el pin
+            p.setPen(QPen(QColor(color), 2))
+            p.drawEllipse(c, self._paso * 0.75, self._paso * 0.75)
+        p.setPen(QPen(col, 2.4 if activo else 1.6))
+        fondo = QColor(W.PANEL)
+        if activo:
+            fondo = QColor(color)
+            fondo.setAlpha(40)
             p.setBrush(QColor(W.PANEL))
             p.drawRoundedRect(caja, 6, 6)
-            p.setPen(QColor(color))
-            p.setFont(QFont("Segoe UI", 9, QFont.Bold))
-            p.drawText(caja.adjusted(8, 3, -6, -18), Qt.AlignLeft | Qt.AlignVCenter, f"{rot}  ·  {funcion}")
-            p.setPen(QColor(W.TENUE))
-            p.setFont(QFont("Segoe UI", 8))
-            sub = f"{pin}  ·  {cn}" if pin else cn
-            p.drawText(caja.adjusted(8, 19, -6, -2), Qt.AlignLeft | Qt.AlignVCenter, sub)
+        p.setBrush(fondo)
+        p.drawRoundedRect(caja, 6, 6)
+        p.setPen(col)
+        p.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        p.drawText(caja.adjusted(8, 3, -6, -18), Qt.AlignLeft | Qt.AlignVCenter, f"{rot}  ·  {funcion}")
+        tenue = QColor(W.TEXTO if activo else W.TENUE)
+        if apagado:
+            tenue.setAlpha(90)
+        p.setPen(tenue)
+        p.setFont(QFont("Segoe UI", 8))
+        sub = f"{pin}  ·  {cn}" if pin else cn
+        p.drawText(caja.adjusted(8, 19, -6, -2), Qt.AlignLeft | Qt.AlignVCenter, sub)
+
+    # --- resaltado con el mouse
+    def _clave_en(self, pos) -> str | None:
+        q = QPointF(pos.x() / W.ESCALA, pos.y() / W.ESCALA)
+        for r, clave in self._zonas:
+            if r.contains(q):
+                return clave
+        return None
+
+    def mouseMoveEvent(self, e):
+        clave = self._clave_en(e.position())
+        if clave != self.resaltado:
+            self.resaltado = clave
+            self.setCursor(Qt.PointingHandCursor if clave else Qt.ArrowCursor)
+            self.update()
+        super().mouseMoveEvent(e)
+
+    def leaveEvent(self, e):
+        if self.resaltado is not None:
+            self.resaltado = None
+            self.setCursor(Qt.ArrowCursor)
+            self.update()
+        super().leaveEvent(e)
 
 
 # ---------------------------------------------------------------------------
