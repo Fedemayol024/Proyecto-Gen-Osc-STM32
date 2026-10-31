@@ -8,11 +8,13 @@ Incluye:
 """
 from __future__ import annotations
 
+import re
 import time
+from dataclasses import asdict
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QAbstractItemView, QDialog, QDialogButtonBox, QHBoxLayout,
-                               QHeaderView, QMessageBox, QSpinBox, QTableWidget,
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import (QDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                               QMessageBox, QSpinBox, QStackedWidget, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 import modelo as M
@@ -22,86 +24,250 @@ COLOR = W.OK
 F_MEDICION = 1e6          # frecuencia para medir el reloj (cuadrada, con compuerta de 1 s)
 
 
-def _leer_num(texto: str) -> float | None:
-    t = (texto or "").strip().replace(",", ".").replace("V", "").replace("v", "").strip()
-    if not t:
+_PREFIJOS = {"": 1.0, "m": 1e-3, "u": 1e-6, "µ": 1e-6, "k": 1e3}
+_RE_TENSION = re.compile(r"^\s*([-+]?[\d.,]+)\s*([mµuk]?)\s*(v(pp)?)?\s*$", re.IGNORECASE)
+
+
+def leer_tension(texto: str) -> float | None:
+    """Lee una tensión escrita como la muestra un osciloscopio: «906,25mV», «625,00 mV»,
+    «1,48 V», «1.48», «2,02». Sin unidad se toma en volts. None si no se entiende."""
+    m = _RE_TENSION.match((texto or "").replace(" ", " "))
+    if not m:
         return None
+    num, pref = m.group(1), m.group(2)
+    if "," in num and "." in num:              # 1.250,5 → miles con punto, decimal con coma
+        num = num.replace(".", "").replace(",", ".")
+    else:
+        num = num.replace(",", ".")
     try:
-        return float(t)
+        v = float(num)
     except ValueError:
         return None
+    pref = pref if pref in ("µ", "") else pref.lower()
+    return v * _PREFIJOS.get(pref, 1.0)
+
+
+def _leer_num(texto: str) -> float | None:
+    return leer_tension((texto or "").replace("%", ""))
 
 
 def _fmt(v: float | None, dec: int = 3) -> str:
     return "" if v is None else f"{v:.{dec}f}".rstrip("0").rstrip(".").replace(".", ",")
 
 
+def _fmt_v(v: float | None, cifras: int = 4) -> str:
+    if v is None:
+        return "—"
+    return M.si(v, "V", cifras)
+
+
 class DialogoCalDDS(QDialog):
-    """Tabla de puntos medidos: amplitud en % → Vpp y tensión media de la salida PGA."""
+    """Asistente paso a paso: la app pone la salida en cada amplitud (0, 25, 50, 75 y 100 %),
+    vos medís y cargás Vpp y tensión media, «Continuar» pasa al siguiente. Al final, un
+    resumen editable. Al cerrar, el AD9833 vuelve a como estaba."""
 
     def __init__(self, panel: "PanelDDS"):
         super().__init__(panel)
         self.panel = panel
         self.setWindowTitle("Calibrar la amplitud del AD9833")
+        self.puntos_pct = list(M.DDS_PUNTOS_CAL)
+        previos = {round(p[0], 3): p for p in panel.c.cal}
+        # mediciones: % -> [vpp, vmed]; arranca con lo que ya había para esos puntos
+        self.medidas = {pct: [previos.get(round(pct, 3), [pct, None, None])[1],
+                              previos.get(round(pct, 3), [pct, None, None])[2]]
+                        for pct in self.puntos_pct}
+        self.otros = [p for k, p in previos.items() if k not in {round(x, 3) for x in self.puntos_pct}]
+        self.paso = 0
+        self._config_previa = M.ConfigDDS.desde_dict(asdict(panel.c))
+
         lay = QVBoxLayout(self)
-        lay.addWidget(W.etiqueta_tenue(
-            "Poné el AD9833 en seno a 1 kHz y medí la salida PGA con un osciloscopio en acople DC. "
-            "Para cada amplitud anotá el Vpp y la tensión media (el centro de la onda, o "
-            "(Vmáx + Vmín) / 2). Con «Probar este punto» la salida pasa a esa amplitud. "
-            "Alcanza con dos puntos; con cinco queda mejor."))
+        self.pila = QStackedWidget()
+        lay.addWidget(self.pila, 1)
+
+        # ---- página de medición
+        pm = QWidget()
+        lm = QVBoxLayout(pm)
+        lm.setContentsMargins(0, 0, 0, 0)
+        self.lbl_paso = QLabel()
+        self.lbl_paso.setObjectName("titulo")
+        lm.addWidget(self.lbl_paso)
+        self.lbl_instr = W.etiqueta_tenue("")
+        self.lbl_instr.setWordWrap(True)
+        lm.addWidget(self.lbl_instr)
+        self.e_vpp = QLineEdit()
+        self.e_vmed = QLineEdit()
+        for e, ph in ((self.e_vpp, "p. ej. 906,25 mV"), (self.e_vmed, "p. ej. 2,02 V (opcional)")):
+            e.setPlaceholderText(ph)
+            W.tam(e, "setFixedWidth", 180)
+            e.textChanged.connect(self._validar)
+            e.returnPressed.connect(self._continuar)
+        lm.addWidget(W.fila("Vpp medido", self.e_vpp))
+        lm.addWidget(W.fila("Tensión media", self.e_vmed,
+                            ayuda="El centro de la onda: la media del osciloscopio en acople DC, "
+                                  "o (Vmáx + Vmín) / 2. Si no la tenés, dejala vacía."))
+        self.lbl_lectura = W.etiqueta_tenue("")
+        lm.addWidget(self.lbl_lectura)
+        self.lbl_progreso = W.etiqueta_tenue("")
+        self.lbl_progreso.setWordWrap(True)
+        lm.addWidget(self.lbl_progreso)
+        lm.addStretch(1)
+        self.pila.addWidget(pm)
+
+        # ---- página de resumen (editable)
+        pr = QWidget()
+        lr = QVBoxLayout(pr)
+        lr.setContentsMargins(0, 0, 0, 0)
+        t = QLabel("Resumen")
+        t.setObjectName("titulo")
+        lr.addWidget(t)
+        lr.addWidget(W.etiqueta_tenue("Revisá los valores (se pueden corregir acá). Las filas sin "
+                                      "Vpp no se guardan."))
         self.tabla = QTableWidget(0, 3)
-        self.tabla.setHorizontalHeaderLabels(["Amplitud (%)", "Vpp medido (V)", "V media medida (V)"])
+        self.tabla.setHorizontalHeaderLabels(["Amplitud (%)", "Vpp medido", "Tensión media"])
         self.tabla.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.tabla.verticalHeader().setVisible(False)
-        self.tabla.setSelectionBehavior(QAbstractItemView.SelectRows)
-        W.tam(self.tabla, "setMinimumSize", 460, 230)
-        lay.addWidget(self.tabla, 1)
-        filas = {round(p[0], 3): p for p in panel.c.cal}
-        for pct in M.DDS_PUNTOS_CAL:
-            filas.setdefault(round(pct, 3), [pct, None, None])
-        for k in sorted(filas):
-            self._agregar(*filas[k])
+        W.tam(self.tabla, "setMinimumSize", 440, 200)
+        lr.addWidget(self.tabla, 1)
+        fila = QHBoxLayout()
+        fila.addWidget(W.boton("Agregar fila", lambda: self._agregar_fila(50.0, None, None)))
+        fila.addWidget(W.boton("Quitar fila", self._quitar))
+        fila.addStretch(1)
+        lr.addLayout(fila)
+        self.pila.addWidget(pr)
 
-        botones = QHBoxLayout()
-        botones.addWidget(W.boton("Probar este punto", self._probar))
-        botones.addWidget(W.boton("Agregar fila", lambda: self._agregar(50.0, None, None)))
-        botones.addWidget(W.boton("Quitar fila", self._quitar))
-        botones.addStretch(1)
-        lay.addLayout(botones)
-        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        bb.button(QDialogButtonBox.Ok).setText("Guardar")
-        bb.button(QDialogButtonBox.Cancel).setText("Cancelar")
-        bb.accepted.connect(self.accept)
-        bb.rejected.connect(self.reject)
-        lay.addWidget(bb)
+        # ---- botones
+        b = QHBoxLayout()
+        self.btn_ant = W.boton("◀ Anterior", self._anterior)
+        self.btn_saltar = W.boton("Saltar este punto", self._saltar)
+        self.btn_sig = W.boton("Continuar ▶", self._continuar, primario=True)
+        self.btn_cancelar = W.boton("Cancelar", self.reject)
+        b.addWidget(self.btn_ant)
+        b.addWidget(self.btn_saltar)
+        b.addStretch(1)
+        b.addWidget(self.btn_cancelar)
+        b.addWidget(self.btn_sig)
+        lay.addLayout(b)
+        W.tam(self, "setMinimumSize", 520, 380)
+        self._ir(0)
 
-    def _agregar(self, pct, vpp, vmed):
+    # ------------------------------------------------------------------ pasos
+    def _ir(self, paso: int):
+        self.paso = paso
+        n = len(self.puntos_pct)
+        if paso < n:
+            pct = self.puntos_pct[paso]
+            self.pila.setCurrentIndex(0)
+            self.lbl_paso.setText(f"Paso {paso + 1} de {n} · amplitud {pct:.0f} %")
+            self.lbl_instr.setText(
+                f"El AD9833 ya está en seno de 1 kHz al {pct:.0f} % (potenciómetro "
+                f"{M.dds_paso_amplitud(pct)}/255). Medí la salida PGA con el osciloscopio en "
+                "acople DC y escribí lo que marca. Acepta «906,25mV», «625,00 mV», «1,48 V»…")
+            vpp, vmed = self.medidas[pct]
+            self.e_vpp.setText("" if vpp is None else _fmt_v(vpp, 5))
+            self.e_vmed.setText("" if vmed is None else _fmt_v(vmed, 5))
+            self.panel.poner_para_calibrar(pct)
+            self.btn_sig.setText("Continuar ▶" if paso < n - 1 else "Ver resumen ▶")
+            self.btn_saltar.setVisible(True)
+            self.e_vpp.setFocus()
+            self.e_vpp.selectAll()
+        else:
+            self._armar_resumen()
+            self.pila.setCurrentIndex(1)
+            self.btn_sig.setText("Guardar")
+            self.btn_saltar.setVisible(False)
+        self.btn_ant.setEnabled(paso > 0)
+        self._progreso()
+        self._validar()
+
+    def _progreso(self):
+        partes = []
+        for pct in self.puntos_pct:
+            vpp, _ = self.medidas[pct]
+            partes.append(f"{pct:.0f} %: {_fmt_v(vpp)}" if vpp is not None else f"{pct:.0f} %: —")
+        self.lbl_progreso.setText("Medido hasta ahora · " + " · ".join(partes))
+
+    def _validar(self, *_):
+        if self.pila.currentIndex() != 0:
+            self.btn_sig.setEnabled(True)
+            return
+        vpp = leer_tension(self.e_vpp.text())
+        txt_med = self.e_vmed.text().strip()
+        vmed = leer_tension(txt_med) if txt_med else None
+        ok = vpp is not None and vpp >= 0 and (not txt_med or vmed is not None)
+        self.btn_sig.setEnabled(ok)
+        if not self.e_vpp.text().strip():
+            self.lbl_lectura.setText("")
+        elif vpp is None or (txt_med and vmed is None):
+            self.lbl_lectura.setText(f"<span style='color:{W.ALERTA}'>No entiendo ese valor: probá "
+                                     "con «906,25 mV» o «1,48 V».</span>")
+        else:
+            t = f"Se guarda: {_fmt_v(vpp)}pp"
+            if vmed is not None:
+                t += f" sobre {_fmt_v(vmed)}"
+            self.lbl_lectura.setText(t)
+
+    def _guardar_paso(self) -> bool:
+        vpp = leer_tension(self.e_vpp.text())
+        txt_med = self.e_vmed.text().strip()
+        vmed = leer_tension(txt_med) if txt_med else None
+        if vpp is None or (txt_med and vmed is None):
+            return False
+        self.medidas[self.puntos_pct[self.paso]] = [vpp, vmed]
+        return True
+
+    def _continuar(self):
+        if self.pila.currentIndex() == 1:
+            self.accept()
+            return
+        if not self.btn_sig.isEnabled() or not self._guardar_paso():
+            return
+        self._ir(self.paso + 1)
+
+    def _saltar(self):
+        self._ir(self.paso + 1)
+
+    def _anterior(self):
+        if self.pila.currentIndex() == 0:
+            self._guardar_paso()            # si había algo válido, no se pierde
+        self._ir(max(0, self.paso - 1))
+
+    # ------------------------------------------------------------------ resumen
+    def _armar_resumen(self):
+        self.tabla.setRowCount(0)
+        filas = [[pct, *self.medidas[pct]] for pct in self.puntos_pct] + [list(p) for p in self.otros]
+        for pct, vpp, vmed in sorted(filas, key=lambda f: f[0]):
+            self._agregar_fila(pct, vpp, vmed)
+
+    def _agregar_fila(self, pct, vpp, vmed):
         r = self.tabla.rowCount()
         self.tabla.insertRow(r)
-        for col, v in enumerate((pct, vpp, vmed)):
-            self.tabla.setItem(r, col, QTableWidgetItem(_fmt(v, 2 if col == 0 else 3)))
+        textos = (_fmt(pct, 2), "" if vpp is None else _fmt_v(vpp, 5),
+                  "" if vmed is None else _fmt_v(vmed, 5))
+        for col, t in enumerate(textos):
+            self.tabla.setItem(r, col, QTableWidgetItem(t))
 
     def _quitar(self):
         r = self.tabla.currentRow()
         if r >= 0:
             self.tabla.removeRow(r)
 
-    def _probar(self):
-        r = self.tabla.currentRow()
-        pct = _leer_num(self.tabla.item(r, 0).text()) if r >= 0 and self.tabla.item(r, 0) else None
-        if pct is None:
-            self.panel.tab.v.estado("Elegí una fila con la amplitud a probar.", W.ALERTA)
-            return
-        self.panel.poner_para_calibrar(min(max(pct, 0.0), 100.0))
-
     def puntos(self) -> list:
+        if self.pila.currentIndex() == 0:   # se guardó sin pasar por el resumen
+            self._guardar_paso()
+            self._armar_resumen()
         salida = []
         for r in range(self.tabla.rowCount()):
             celdas = [self.tabla.item(r, c).text() if self.tabla.item(r, c) else "" for c in range(3)]
-            pct, vpp, vmed = (_leer_num(t) for t in celdas)
+            pct = _leer_num(celdas[0])
+            vpp = leer_tension(celdas[1])
+            vmed = leer_tension(celdas[2]) if celdas[2].strip() else None
             if pct is not None and vpp is not None:
                 salida.append([pct, vpp, vmed])
         return M.limpiar_cal_dds(salida)
+
+    def done(self, r):
+        self.panel.aplicar_config(self._config_previa, conservar_cal=True)   # vuelve a como estaba
+        super().done(r)
 
 
 class PanelDDS(QWidget):
@@ -343,6 +509,44 @@ class PanelDDS(QWidget):
         self.tab.v.guardar_config_pronto()
         n = len(self.c.cal)
         self.tab.v.estado(f"Calibración de amplitud guardada ({n} punto{'s' if n != 1 else ''}).", W.OK)
+
+    def aplicar_config(self, c: "M.ConfigDDS", conservar_cal: bool = False):
+        """Pone todos los controles según una configuración (y la manda)."""
+        cal, mclk = self.c.cal, self.c.mclk
+        controles = [self.hab, self.forma, self.frec, self.periodo, self.fase, self.amp, self.mod,
+                     self.bar_escala, self.bar_f1, self.bar_f2, self.bar_t, self.fsk_f2,
+                     self.fsk_tasa, self.psk_fase2, self.psk_tasa, self.raf_ciclos,
+                     self.raf_periodo, self.am_prof, self.am_frec]
+        for w in controles:
+            w.blockSignals(True)
+        try:
+            self.hab.setChecked(c.habilitado)
+            self.forma.setCurrentText(c.forma)
+            self.frec.set_valor(c.frecuencia)
+            self.periodo.set_valor(1 / c.frecuencia)
+            self.fase.set_valor(c.fase)
+            self.amp.set_valor(c.amplitud)
+            self.mod.setCurrentText(c.modulacion)
+            self.bar_escala.setCurrentText("Logarítmico" if c.bar_log else "Lineal")
+            self.bar_f1.set_valor(c.bar_f1)
+            self.bar_f2.set_valor(c.bar_f2)
+            self.bar_t.set_valor(c.bar_t)
+            self.fsk_f2.set_valor(c.fsk_f2)
+            self.fsk_tasa.set_valor(c.fsk_tasa)
+            self.psk_fase2.set_valor(c.psk_fase2)
+            self.psk_tasa.set_valor(c.psk_tasa)
+            self.raf_ciclos.setValue(int(c.raf_ciclos))
+            self.raf_periodo.set_valor(c.raf_periodo)
+            self.am_prof.set_valor(c.am_prof)
+            self.am_frec.set_valor(c.am_frec)
+        finally:
+            for w in controles:
+                w.blockSignals(False)
+        self._leer()
+        self.c.mclk = mclk
+        if conservar_cal:
+            self.c.cal = cal
+        self._cambio()
 
     def poner_para_calibrar(self, pct: float):
         """Seno de 1 kHz encendido a la amplitud pedida, sin modulación, para medir."""

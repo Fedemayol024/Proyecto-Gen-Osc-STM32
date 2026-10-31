@@ -447,22 +447,53 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         d._mostrar()
         self.assertIn("pines directos", d.lbl_info.text())
 
-    def test_ad9833_dialogo_de_calibracion(self):
+    def test_ad9833_lee_tensiones_como_las_muestra_el_osciloscopio(self):
+        from panel_dds import leer_tension
+        for texto, v in [("906,25mV", 0.90625), ("625,00 mV", 0.625), ("1,48 V", 1.48), ("1.48", 1.48),
+                         ("2,02", 2.02), ("906,25 mVpp", 0.90625), ("500 µV", 0.0005), ("0", 0.0)]:
+            self.assertAlmostEqual(leer_tension(texto), v, msg=texto)
+        for texto in ("", "abc", ",", "m"):
+            self.assertIsNone(leer_tension(texto), texto)
+
+    def test_ad9833_calibracion_paso_a_paso(self):
         from panel_dds import DialogoCalDDS
         d = self.v.tab_gen.dds
-        d.c.cal = [[80.0, 1.48, 2.02]]
+        d.c.cal = [[80.0, 1.48, 2.02]]                      # medición anterior fuera de la lista
+        d.frec.set_valor(5e6)
+        d.mod.setCurrentText("FSK")                          # lo que había antes de calibrar
         dlg = DialogoCalDDS(d)
-        self.assertEqual(dlg.tabla.rowCount(), 6)                 # 0/25/50/75/100 y el medido
-        fila = [dlg.tabla.item(r, 0).text() for r in range(6)].index("50")
-        dlg.tabla.item(fila, 1).setText("0,93")
-        dlg.tabla.item(fila, 2).setText("2,01")
-        self.assertEqual(dlg.puntos(), [[50.0, 0.93, 2.01], [80.0, 1.48, 2.02]])
-        dlg.tabla.setCurrentCell(fila, 0)
-        with mock.patch.object(type(self.v.disp), "esta_conectado", new_callable=mock.PropertyMock,
-                               return_value=False):
-            dlg._probar()
-        self.assertEqual((d.c.frecuencia, d.c.amplitud, d.c.habilitado), (1000.0, 50.0, True))
-        dlg.deleteLater()
+        # paso 1: la salida queda en seno de 1 kHz al 0 %, sin modulación
+        self.assertIn("Paso 1 de 5", dlg.lbl_paso.text())
+        self.assertEqual((d.c.frecuencia, d.c.amplitud, d.c.modulacion), (1000.0, 0.0, "Ninguna"))
+        self.assertFalse(dlg.btn_sig.isEnabled())            # falta el Vpp
+        dlg.e_vpp.setText("0 mV")
+        dlg.e_vmed.setText("2,0 V")
+        dlg._continuar()
+        # paso 2: 25 %
+        self.assertIn("Paso 2 de 5", dlg.lbl_paso.text())
+        self.assertEqual(d.c.amplitud, 25.0)
+        dlg.e_vpp.setText("algo")
+        self.assertFalse(dlg.btn_sig.isEnabled())            # no se entiende: no avanza
+        self.assertIn("No entiendo", dlg.lbl_lectura.text())
+        dlg.e_vpp.setText("453,13mV")
+        dlg.e_vmed.setText("")                               # la media es opcional
+        dlg._continuar()
+        dlg.e_vpp.setText("906,25 mV")                        # 50 %
+        dlg._continuar()
+        dlg._saltar()                                        # 75 %: no se midió
+        dlg.e_vpp.setText("1,85 V")
+        dlg.e_vmed.setText("2,03")
+        dlg._continuar()                                     # 100 % → resumen
+        self.assertEqual(dlg.pila.currentIndex(), 1)
+        self.assertEqual(dlg.btn_sig.text(), "Guardar")
+        self.assertEqual(dlg.puntos(), [[0.0, 0.0, 2.0], [25.0, 0.45313, None], [50.0, 0.90625, None],
+                                        [80.0, 1.48, 2.02], [100.0, 1.85, 2.03]])
+        dlg._anterior()                                      # se puede volver a corregir
+        self.assertIn("Paso 5 de 5", dlg.lbl_paso.text())
+        dlg.reject()
+        # al cerrar, el AD9833 vuelve a como estaba
+        self.assertEqual((d.c.frecuencia, d.c.modulacion), (5e6, "FSK"))
+        self.assertEqual(d.c.cal, [[80.0, 1.48, 2.02]])      # cancelado: no cambia la calibración
 
     def test_ad9833_medir_reloj_con_el_frecuencimetro(self):
         enviados = self._dds_conectado({"dds_mclk": 25e6, "dds_mod": 1})
