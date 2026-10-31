@@ -66,6 +66,7 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
   - en un pasaaltos, el **corte a −3 dB se mide desde la primera meseta** después de la subida, no desde lo que suba la curva más arriba en MHz.
 
 ### Corregido
+- **Bode:** con los modelos de orden 3 el resumen decía «Modelo de : error…» sin el orden; ahora dice, por ejemplo, «Modelo de 3 polos y 3 ceros».
 - **El trazo se congelaba al tocar Single o Autoset** (en las dos placas) y solo volvía reconectando la placa. Esos dos botones pedían una captura nueva mientras la anterior todavía estaba en curso, y el firmware la cortaba a la mitad: el ADC dual quedaba en *overrun* y no volvía a entregar datos. Ahora:
   - la app espera a que llegue la captura en camino antes de arrancar el Single o el Autoset (como ya hacía RUN);
   - el firmware, al cortar una captura, reinicia bien el ADC y el DMA;

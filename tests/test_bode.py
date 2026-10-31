@@ -337,6 +337,12 @@ class TestInformeBode(unittest.TestCase):
         self.assertTrue(self.bode.generar_informe(ruta))
         self.assertGreaterEqual(self._paginas(ruta), 1)
 
+    def test_texto_del_orden_para_todos_los_modelos(self):
+        from tab_bode import texto_orden
+        for n, d in M.BODE_ORDENES:
+            self.assertIn("polo", texto_orden(n, d))
+        self.assertEqual(texto_orden(3, 3), "3 polos y 3 ceros")
+
     def test_nombre_de_archivo_desde_el_titulo(self):
         from tab_bode import nombre_archivo
         self.assertEqual(nombre_archivo("RC pasabajos "), "RC pasabajos")

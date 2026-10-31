@@ -34,6 +34,14 @@ import modelo as M
 import widgets as W
 
 
+def texto_orden(n: int, d: int) -> str:
+    """(2, 3) -> «3 polos y 2 ceros»."""
+    def cuantos(k, uno, varios):
+        return f"{k} {uno if k == 1 else varios}"
+    t = cuantos(d, "polo", "polos")
+    return t + (f" y {cuantos(n, 'cero', 'ceros')}" if n else "")
+
+
 def nombre_archivo(titulo: str) -> str:
     """El título del informe como nombre de archivo válido en Windows (sin \\ / : * ? " < > |)."""
     t = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", titulo)
@@ -472,8 +480,7 @@ class TabBode(QWidget):
             lineas.append(f"Frecuencia de corte (−3 dB {ref}): "
                           + ", ".join(f"<b>{M.si(x, 'Hz', 4)}</b>" for x in a["f3db"]))
         lineas += a["detalles"]
-        orden = {(0, 1): "1 polo", (1, 1): "1 polo y 1 cero", (0, 2): "2 polos",
-                 (1, 2): "2 polos y 1 cero", (2, 2): "2 polos y 2 ceros"}.get(a["orden"], "")
+        orden = texto_orden(*a["orden"])
         usados = int(self.modelo.usados.sum())
         lineas.append(f"<span style='color:{W.TENUE}'>Modelo de {orden}: error "
                       f"{a['error_db']:.2f} dB / {a['error_fase']:.1f}° en {usados} de {len(f)} puntos"
