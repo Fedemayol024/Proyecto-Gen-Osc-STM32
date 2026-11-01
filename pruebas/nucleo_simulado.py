@@ -6,9 +6,12 @@ Conexiones simuladas:
   OUT1 -> IN1 y OUT2 -> IN2   (modo "lazo", por defecto)
   OUT1 -> IN1 y OUT1 -> filtro RC (fc = 1 kHz) -> IN2   (modo "bode")
   salida PGA del AD9833 -> IN1                            (modo "dds")
+  circuito NTC + puente + AD620 de la demo, en «Pin directo»  (modo "ntc"):
+    CH1 = salida del AD620, CH2 = nodo A. La NTC está a 25 °C, a los 14 s "la agarran"
+    (sube hacia 33 °C) y a los 32 s "la sueltan" (se enfría de vuelta).
   AD9833 -> IN1 y AD9833 -> RC (fc = 100 kHz) -> IN2     (modo "ddsbode", Bode hasta MHz)
 Las salidas usan la etapa "Placa ±5 V" y las entradas el rango ±10 V.
-Uso: python nucleo_simulado.py [lazo|bode|dds|ddsbode] [registro.txt]
+Uso: python nucleo_simulado.py [lazo|bode|dds|ddsbode|ntc] [registro.txt]
 """
 import math
 import os
@@ -107,6 +110,29 @@ def salida_dds(t: np.ndarray, h: complex = 1.0) -> np.ndarray:
     return vmed + vpp / 2 * onda + rng.normal(0, 0.002, len(t))
 
 
+T_INICIO = time.monotonic()
+
+
+def ntc_tensiones():
+    """Circuito de la demo: NTC 5 kΩ (B = 3950 K) arriba de R1 = 5,1 kΩ, AD620 con G = 2,051."""
+    ts = time.monotonic() - T_INICIO
+    if ts < 14:
+        tc = 25.0
+    elif ts < 32:
+        tc = 25 + 8 * (1 - math.exp(-(ts - 14) / 4))
+    else:
+        t32 = 25 + 8 * (1 - math.exp(-18 / 4))
+        tc = 25 + (t32 - 25) * math.exp(-(ts - 32) / 10)
+    r = 5000 * math.exp(3950 * (1 / (tc + 273.15) - 1 / 298.15))
+    va = 3.3 * 5100 / (5100 + r)
+    return 1.65 + (1 + 49.4 / 47) * (va - 1.65), va
+
+
+def adc_directo(v: np.ndarray) -> np.ndarray:
+    cod = np.rint(v / 3.3 * 4095 + rng.normal(0, 1.2, len(v)))
+    return np.clip(cod, 0, 4095).astype(np.uint32)
+
+
 def capturar(n, pre, fs, fuente, nivel, flanco, hist):
     fs = min(fs, FSMAX)
     psc = max(1, math.ceil(TCLK2 / fs / 65536))
@@ -129,6 +155,10 @@ def capturar(n, pre, fs, fuente, nivel, flanco, hist):
         v1 = vout(gen[1], t) if MODO != "dds" else salida_dds(t)
         v2 = rc(v1, fs) if MODO == "bode" else vout(gen[2], t)
     c1, c2 = adc(v1[calent:]), adc(v2[calent:])
+    if MODO == "ntc":
+        vo, va = ntc_tensiones()
+        zumbido = 0.004 * np.sin(2 * np.pi * 50 * t[calent:])      # 50 Hz que capta el cable
+        c1, c2 = adc_directo(vo + zumbido), adc_directo(va + 0.5 * zumbido)
     disp = 2 if fuente == 0 else 0
     ini = 0
     if fuente:

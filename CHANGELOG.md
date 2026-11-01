@@ -19,6 +19,19 @@ La app (`VERSION` en `app/main.py`) y el firmware (`INSTR_VERSION` en `instrumen
 
 _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan a una sección con número y fecha._
 
+### Nuevo
+- **Pestaña «Termómetro NTC»** (rama `termometro-ntc`), para el circuito NTC + puente + AD620 de la demo de Medidas Electrónicas I:
+  - Al entrar te pide la temperatura ambiente que marca el multímetro, mide la tensión durante 3 s y calibra (o te deja usar la calibración guardada).
+  - Muestra la temperatura en grande y dos gráficos en función de la hora: la tensión del canal y la temperatura.
+  - Unidades a elección: °C, K o °F.
+  - Registro: guarda el promedio cada 30 s (se puede cambiar) y lo exporta a CSV con fecha, hora, temperatura y tensión, con `;` y coma decimal para que Excel lo abra bien.
+  - Lee por CH1 (salida del AD620) o por CH2 (nodo A del puente), en «Pin directo». Los parámetros del circuito (ganancia, R serie, VREF, excitación y B de la NTC) se pueden ajustar.
+  - Mientras está abierta, el osciloscopio queda en pausa: los dos usan el mismo ADC.
+- Nucleo simulado: modo `ntc`, con la NTC a 25 °C que se calienta a los 14 s y se enfría a los 32 s, y la prueba `pruebas/prueba_termometro.py`.
+
+### Pendiente de probar
+- Termómetro NTC con el circuito real.
+
 ---
 
 ## [0.9.0 beta] · 2026-10-31 · Módulo AD9833 y Bode hasta 10 MHz

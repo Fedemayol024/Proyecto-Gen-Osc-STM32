@@ -26,6 +26,7 @@ from tab_generador import TabGenerador
 from tab_herramientas import TabHerramientas
 from tab_osciloscopio import TabOsciloscopio
 from tab_placa import TabPlaca
+from tab_termometro import TabTermometro
 
 # Versión de la app (MAYOR.MENOR.PARCHE). Mientras el MAYOR sea 0 es una beta: todavía
 # se agregan funciones. El firmware usa el mismo número (INSTR_VERSION en instrumento.h);
@@ -170,10 +171,12 @@ class Ventana(QMainWindow):
         self.tab_herr = TabHerramientas(self)
         self.tab_cal = TabCalibracion(self)
         self.tab_placa = TabPlaca(self)
+        self.tab_termo = TabTermometro(self)
         self.tabs.addTab(self.tab_osc, "Osciloscopio")
         self.tabs.addTab(self.tab_gen, "Generador")
         self.tabs.addTab(self.tab_bode, "Bode")
         self.tabs.addTab(self.tab_herr, "Frecuencímetro y PWM")
+        self.tabs.addTab(self.tab_termo, "Termómetro NTC")
         self.tabs.addTab(self.tab_cal, "Calibración")
         self.tabs.addTab(self.tab_placa, "Placa")
 
@@ -323,12 +326,13 @@ class Ventana(QMainWindow):
         self._t_guardar.start(1500)
 
     def guardar_config(self):
-        if not hasattr(self, "tab_cal"):
+        if not hasattr(self, "tab_termo"):
             return
         self.config.gen = self.tab_gen.estado_config()
         self.config.osc = self.tab_osc.estado_config()
         h = self.tab_herr.estado_config()
         h["bode"] = self.tab_bode.estado_config()
+        h["termo"] = self.tab_termo.estado_config()
         self.config.herramientas = h
         self.config.guardar()
 
@@ -434,6 +438,7 @@ class Ventana(QMainWindow):
         self.lbl_con.setStyleSheet(f"color: {W.OK};")
         self.tab_gen.reenviar_todo()
         self.tab_osc.al_conectar()
+        self.tab_termo.al_conectar()
         self.tab_placa.al_conectar()
         self.guardar_config_pronto()
         if not misma_serie(version, VERSION):
@@ -488,6 +493,8 @@ class Ventana(QMainWindow):
             self.tab_bode.al_recibir(d)
         elif dueno == "cal":
             self.tab_cal.al_recibir(d)
+        elif dueno == "termo":
+            self.tab_termo.al_recibir(d)
         elif dueno == "dds":
             self.tab_gen.dds.al_captura(d)
         else:
