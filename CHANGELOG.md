@@ -27,6 +27,7 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
   - Registro: guarda el promedio cada 30 s (se puede cambiar) y lo exporta a CSV con fecha, hora, temperatura y tensión, con `;` y coma decimal para que Excel lo abra bien.
   - Lee por CH1 (salida del AD620) o por CH2 (nodo A del puente), en «Pin directo». Los parámetros del circuito (ganancia, R serie, VREF, excitación y B de la NTC) se pueden ajustar.
   - Mientras está abierta, el osciloscopio queda en pausa: los dos usan el mismo ADC.
+  - Al calibrar (o cambiar un parámetro del circuito) se recalcula toda la curva ya dibujada y el registro, así no queda un salto en el gráfico. Al cambiar de canal se limpian los gráficos.
 - Nucleo simulado: modo `ntc`, con la NTC a 25 °C que se calienta a los 14 s y se enfría a los 32 s, y la prueba `pruebas/prueba_termometro.py`.
 
 ### Pendiente de probar

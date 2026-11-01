@@ -228,6 +228,8 @@ class TabTermometro(QWidget):
         self.c_v.setPen(pg.mkPen(W.CH1 if c == 1 else W.CH2, width=2))
         self.p_v.setTitle(f"Tensión medida por CH{c}", color=W.TENUE)
         self.v.guardar_config_pronto()
+        if self.t:          # las tensiones viejas son de otro canal: no se mezclan
+            self._limpiar()
         if self.cal and self.cal.get("canal") != f"CH{c}":
             self.lbl_cal.setText("La calibración guardada es de otro canal: recalibrá.")
             self.lbl_cal.setStyleSheet(f"color: {W.ALERTA};")
@@ -238,6 +240,7 @@ class TabTermometro(QWidget):
                          "beta": self.e_beta.value()})
         self.v.guardar_config_pronto()
         self._mostrar_cal()
+        self._recalcular()
 
     # ------------------------------------------------------------ conversión
     def _ganancia(self) -> float:
@@ -321,8 +324,16 @@ class TabTermometro(QWidget):
         self.cal = {"t_k": self.t_cal_c + T0_K, "v": v, "r": r, "canal": self.par["canal"],
                     "fecha": datetime.now().strftime("%d/%m/%Y %H:%M")}
         self._mostrar_cal()
+        self._recalcular()
         self.v.guardar_config_pronto()
         self.v.estado(f"Termómetro calibrado: {formato(self.t_cal_c, 1)} °C ↔ {formato(v, 3)} V.", W.OK)
+
+    def _recalcular(self):
+        """Con la calibración o los parámetros nuevos se recalcula toda la historia (se
+        guardan las tensiones), así el gráfico no queda con un salto en el momento de calibrar."""
+        self.tk = [self.a_kelvin(v) for v in self.vs]
+        self.registro = [(fh, self.a_kelvin(v), v, dt) for fh, _, v, dt in self.registro]
+        self._redibujar()
 
     def _mostrar_cal(self):
         if self.cal is None:
