@@ -1,4 +1,13 @@
-"""Estilo visual y controles comunes de la aplicación."""
+"""
+Estilo visual y controles comunes de la aplicación.
+
+  - Colores y hoja de estilo (tema oscuro) de toda la app.
+  - Escala de la interfaz: pt() y px() agrandan o achican letras y medidas según la
+    resolución elegida en ⚙ (Opciones gráficas).
+  - Controles reutilizables: EntradaSI (número con prefijos: 2k, 1,5 m, 10 µ), EjeLogFrecuencia
+    (eje en Hz para los gráficos logarítmicos), EtiquetaRecortable (texto que se corta con «…»)
+    y atajos para armar filas, combos, grupos y botones con el mismo estilo.
+"""
 from __future__ import annotations
 
 import math
@@ -7,7 +16,7 @@ import weakref
 import pyqtgraph as pg
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (QComboBox, QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 import modelo as M
@@ -305,6 +314,7 @@ class EtiquetaRecortable(QLabel):
 
 
 def fila(etiqueta: str, *widgets, ayuda: str = "") -> QWidget:
+    """Fila «etiqueta — control» (con un texto de ayuda opcional como tooltip)."""
     w = QWidget()
     lay = QHBoxLayout(w)
     lay.setContentsMargins(0, 0, 0, 0)
@@ -320,6 +330,7 @@ def fila(etiqueta: str, *widgets, ayuda: str = "") -> QWidget:
 
 
 def combo(opciones, actual=None) -> QComboBox:
+    """ComboBox con las opciones dadas y una elegida."""
     c = QComboBox()
     c.addItems(opciones)
     if actual in opciones:
@@ -328,6 +339,7 @@ def combo(opciones, actual=None) -> QComboBox:
 
 
 def grupo(titulo: str) -> tuple[QGroupBox, QVBoxLayout]:
+    """Recuadro con título; devuelve (recuadro, layout donde agregar cosas)."""
     g = QGroupBox(titulo)
     lay = QVBoxLayout(g)
     lay.setSpacing(6)
@@ -341,14 +353,8 @@ def etiqueta_tenue(texto: str) -> QLabel:
     return l
 
 
-def separador() -> QFrame:
-    f = QFrame()
-    f.setFrameShape(QFrame.HLine)
-    f.setStyleSheet(f"color: {BORDE};")
-    return f
-
-
 def boton(texto: str, cb=None, primario=False, chequeable=False) -> QPushButton:
+    """Botón con el estilo de la app (primario = azul) y la función a llamar."""
     b = QPushButton(texto)
     if primario:
         b.setObjectName("primario")

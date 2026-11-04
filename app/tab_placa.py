@@ -1,7 +1,11 @@
-"""Pestaña Placa: capacidades, límites, pines y conexiones de cada placa.
+"""
+Pestaña Placa: capacidades, límites, pines y conexiones de cada placa.
 
-Los pines son los mismos en las dos Nucleo-144 (conectores ST Zio, manual
-UM1974 de ST). Lo que cambia entre placas son las velocidades.
+  - DibujoPlaca: vista de la Nucleo-144 con los pines que usa el instrumento; cada rótulo va
+    por su propio carril y se resalta al pasar el mouse.
+  - DibujoConexiones: esquemas de cómo cablear cada función (osciloscopio, generador,
+    AD9833, Bode...).
+  - TabPlaca: arma la pestaña y muestra datos en vivo de la placa conectada (INFO?, STAT?).
 """
 from __future__ import annotations
 
@@ -167,6 +171,7 @@ class DibujoPlaca(QWidget):
         self.update()
 
     def paintEvent(self, _e):
+        """Dibuja la placa, los conectores CN7–CN10 y los rótulos de los pines usados."""
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.fillRect(self.rect(), QColor(W.FONDO))
@@ -317,6 +322,8 @@ class DibujoPlaca(QWidget):
             self._dibujar_rotulo(p, path, caja, c, rot, pin, funcion, color, cn)
 
     def _dibujar_rotulo(self, p, path, caja, c, rot, pin, funcion, color, cn):
+        """Rótulo de un pin con su cable por un carril propio; se resalta si el mouse
+        está encima."""
         activo = self.resaltado == cn
         apagado = self.resaltado is not None and not activo
         col = QColor(color)
@@ -363,6 +370,7 @@ class DibujoPlaca(QWidget):
         return None
 
     def mouseMoveEvent(self, e):
+        """Resalta el cable del rótulo o pin que está bajo el mouse."""
         clave = self._clave_en(e.position())
         if clave != self.resaltado:
             self.resaltado = clave
@@ -405,6 +413,8 @@ ESQUEMAS = {
 
 
 class DibujoConexiones(QWidget):
+    """Esquema de conexiones de una función (qué cable va a qué pin)."""
+
     def __init__(self):
         super().__init__()
         self.esquema = next(iter(ESQUEMAS))
@@ -464,6 +474,7 @@ class DibujoConexiones(QWidget):
                    "USB USER (CN13)")
 
     def paintEvent(self, _e):
+        """Dibuja el esquema elegido."""
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.fillRect(self.rect(), QColor(W.FONDO))
@@ -631,6 +642,8 @@ class DibujoConexiones(QWidget):
 # Pestaña
 # ---------------------------------------------------------------------------
 class TabPlaca(QWidget):
+    """Pestaña Placa: datos de la placa elegida, dibujo de pines y esquemas."""
+
     def __init__(self, ventana):
         super().__init__()
         self.v = ventana
@@ -709,6 +722,7 @@ class TabPlaca(QWidget):
         self.actualizar()
 
     def actualizar(self):
+        """Rearma los textos y dibujos para la placa elegida."""
         placa = self.v.placa
         self.lbl_titulo.setText(M.nombre_placa(placa))
         self.dib_placa.set_placa(placa)

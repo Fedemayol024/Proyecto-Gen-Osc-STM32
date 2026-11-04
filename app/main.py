@@ -1,7 +1,20 @@
 """
-Instrumento NUCLEO-F767ZI / NUCLEO-F429ZI - Osciloscopio + Generador + Bode + Herramientas
-=========================================================================================
-Al abrir se elige la placa (se puede recordar la elección y cambiarla después).
+Instrumento NUCLEO-F767ZI / NUCLEO-F429ZI · Osciloscopio + Generador + Bode + Herramientas
+==========================================================================================
+Punto de entrada de la app: arma la ventana principal y conecta las piezas.
+
+    Dispositivo (dispositivo.py)   habla con la placa por USB, en un hilo aparte
+          │  señales: conectado · linea · datos
+          ▼
+    Ventana (este archivo)         reparte cada mensaje a la pestaña que corresponde
+          ├─ TabOsciloscopio       ├─ TabGenerador (+ PanelDDS del AD9833)
+          ├─ TabBode               ├─ TabHerramientas (frecuencímetro y PWM)
+          ├─ TabCalibracion        └─ TabPlaca (pines y conexiones)
+
+Las capturas del ADC tienen un «dueño» (osc, bode, cal o dds): la Ventana recuerda quién
+pidió la última y le entrega los datos solo a él (ver pedir_captura y _al_datos).
+Toda la matemática está en modelo.py, así la interfaz queda separada de los cálculos.
+
 Ejecutar:   python main.py
 Crear .exe: build_exe.bat
 """
@@ -41,6 +54,7 @@ def misma_serie(a: str, b: str) -> bool:
 
 
 def recurso(nombre: str) -> str:
+    """Ruta de un archivo de la app (también dentro del .exe armado con PyInstaller)."""
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
     return str(base / nombre)
 
@@ -107,6 +121,8 @@ def elegir_placa(parent=None, forzar: bool = False) -> str | None:
 
 
 class Ventana(QMainWindow):
+    """Ventana principal: barra de conexión, pestañas y reparto de los mensajes de la placa."""
+
     def __init__(self, placa: str = M.PLACA_POR_DEFECTO, auto_puerto: str | None = None):
         super().__init__()
         self.placa = placa if placa in M.PLACAS else M.PLACA_POR_DEFECTO
@@ -207,6 +223,7 @@ class Ventana(QMainWindow):
         return resolucion_de(pantalla)
 
     def _armar_menu_opciones(self):
+        """Arma el menú ⚙ con las resoluciones que tienen sentido para esta pantalla."""
         m = self.menu_opciones
         m.clear()
         pant = self.resolucion_pantalla()
@@ -316,13 +333,16 @@ class Ventana(QMainWindow):
 
     # -------------------------------------------------------------- estado
     def estado(self, texto: str, color: str = W.TENUE):
+        """Mensaje en la barra de estado (abajo), con el color que corresponda."""
         self.statusBar().setStyleSheet(f"color: {color};")
         self.statusBar().showMessage(texto)
 
     def guardar_config_pronto(self):
+        """Guarda la configuración en 1,5 s (si hay más cambios, espera al último)."""
         self._t_guardar.start(1500)
 
     def guardar_config(self):
+        """Junta el estado de cada pestaña y lo guarda en el archivo de la placa."""
         if not hasattr(self, "tab_cal"):
             return
         self.config.gen = self.tab_gen.estado_config()
@@ -334,6 +354,7 @@ class Ventana(QMainWindow):
 
     # -------------------------------------------------------------- conexión
     def actualizar_puertos(self):
+        """Vuelve a listar los puertos COM (el del Nucleo primero)."""
         puertos = listar_puertos()
         self._mapa_puertos = {et: dev for dev, et in puertos}
         self.combo_puertos.clear()
@@ -350,6 +371,7 @@ class Ventana(QMainWindow):
     RECONEXION_S = 20.0
 
     def _perdida_conexion(self, motivo: str):
+        """Se cortó la placa: durante 20 s se busca el mismo puerto para reconectar sola."""
         puerto = self._reconexion["puerto"] if self._reconexion else self.config.puerto
         self._al_desconectar(f"{motivo} Reintentando conectar…", W.ALERTA)
         if puerto:
@@ -361,6 +383,7 @@ class Ventana(QMainWindow):
             self._t_recon.start(1000)
 
     def _error_conexion(self, motivo: str):
+        """No se pudo conectar (puerto ocupado, la placa no respondió...)."""
         if self._reconexion:                 # durante la reconexión los fallos son esperables
             self._reconexion["intentando"] = False
             return
@@ -371,6 +394,7 @@ class Ventana(QMainWindow):
         self._reconexion = None
 
     def _intentar_reconexion(self):
+        """Cada segundo durante la reconexión: si el puerto volvió a aparecer, conecta."""
         r = self._reconexion
         if not r:
             self._t_recon.stop()
@@ -387,6 +411,7 @@ class Ventana(QMainWindow):
             self.disp.abrir(r["puerto"])
 
     def alternar_conexion(self):
+        """Botón Conectar / Desconectar (o Cancelar durante la reconexión)."""
         if self._reconexion:                 # el botón dice «Cancelar»
             self._cancelar_reconexion()
             self.disp.cerrar()
@@ -407,6 +432,8 @@ class Ventana(QMainWindow):
         self.disp.abrir(puerto)
 
     def _al_conectar(self, version: str):
+        """La placa respondió: comprueba que sea la placa elegida, reenvía la configuración
+        del generador y avisa si el firmware es de otra versión."""
         detectada = self.disp.placa
         if detectada and detectada != self.placa:
             puerto = self.disp.puerto
@@ -448,6 +475,7 @@ class Ventana(QMainWindow):
             self.estado("Instrumento conectado.", W.OK)
 
     def _al_desconectar(self, motivo: str, color: str):
+        """Deja todas las pestañas en estado «sin placa»."""
         self.btn_con.setEnabled(True)
         self.btn_con.setText("Conectar")
         self.lbl_con.setText("● Desconectado")
@@ -455,16 +483,29 @@ class Ventana(QMainWindow):
         self.tab_osc.al_desconectar()
         self.tab_herr.al_desconectar()
         self.tab_placa.al_desconectar()
+        self.tab_cal.al_desconectar()
         if self.tab_bode.activo:
             self.tab_bode.activo = False
             self.tab_bode.btn.setText("Iniciar barrido")
         self.estado(motivo, color)
 
     def _al_linea(self, linea: str):
+        """Línea de texto de la placa: los errores van a la barra de estado y el resto al
+        Generador y a Herramientas, que esperan respuestas (OK ..., FREQ ...)."""
         if linea.startswith("ERR") and not linea.startswith("ERR GTBL"):
             self.estado(f"La placa respondió: {linea}", W.ERROR)
         self.tab_gen.al_linea(linea)
         self.tab_herr.al_linea(linea)
+
+    def captura_ocupada(self, quien: str) -> str | None:
+        """Si otra parte de la app está usando las capturas (un barrido de Bode o una
+        calibración), devuelve un aviso para mostrar; si no, None. Así RUN, Single o
+        Autoset no le «roban» la captura a un barrido en curso (y al revés)."""
+        if quien != "bode" and self.tab_bode.activo:
+            return "Hay un barrido de Bode en curso: detenelo primero (pestaña Bode)."
+        if quien != "cal" and (self.tab_cal.auto or self.tab_cal.cero):
+            return "Hay una calibración de las entradas en curso: esperá a que termine."
+        return None
 
     def pedir_captura(self, dueno: str, n: int, pre: int, fs: float, fuente: int = 0,
                       nivel: int = 2048, flanco: int = 0, hist: int = 20):
@@ -480,6 +521,7 @@ class Ventana(QMainWindow):
             self.disp.enviar("CAPX")
 
     def _al_datos(self, d: dict):
+        """Llegó una captura: se entrega solo si coincide con el último pedido, y a su dueño."""
         if self._esperado is None or (d["n"], d["pre"]) != self._esperado:
             return
         self._esperado = None
@@ -494,6 +536,7 @@ class Ventana(QMainWindow):
             self.tab_osc.al_recibir(d)
 
     def closeEvent(self, e):
+        """Al cerrar: guarda la configuración y deja la placa sin captura en curso."""
         self.tab_osc.fosforo.timer.stop()
         if self.tab_osc.dlg_fft is not None:
             self.tab_osc.dlg_fft.close()
@@ -514,6 +557,7 @@ def resolucion_de(pantalla) -> tuple[int, int]:
 
 
 def main():
+    """Arranque: escala de la interfaz, estilo, ícono, elección de placa y ventana."""
     app = QApplication(sys.argv)
     W.ESCALA = M.escala_para(M.resolucion_guardada(), resolucion_de(app.primaryScreen()))
     app.setStyleSheet(W.estilo())

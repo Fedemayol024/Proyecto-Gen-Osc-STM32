@@ -19,6 +19,18 @@ La app (`VERSION` en `app/main.py`) y el firmware (`INSTR_VERSION` en `instrumen
 
 _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan a una sección con número y fecha._
 
+### Corregido
+- **El osciloscopio y el Bode ya no se pisan las capturas.** Si con un barrido de Bode o una calibración de las entradas en curso se tocaba RUN, Single o Autoset (o al revés), los dos se quitaban la captura entre sí y quedaban esperando. Ahora el segundo no arranca y la barra de estado dice qué está en curso.
+- **Calibración de entradas que quedaba colgada:** si se desconectaba la placa en medio de la autocalibración, el botón quedaba deshabilitado. Ahora se cancela y se avisa.
+- **Reconexión cancelada que se conectaba igual:** si se tocaba «Cancelar» mientras la app todavía estaba buscando la placa, la conexión podía completarse de todos modos (o mostrar un error que ya no correspondía). Ahora ese intento se descarta.
+
+### Mejorado
+- **Código de la app comentado:** cada archivo `.py` empieza con una explicación de qué hace y cómo se conecta con los demás, y las clases y funciones principales tienen una descripción corta. Sirve para leer el código o exponerlo.
+- Limpieza sin cambios de funcionamiento: se quitaron importaciones y funciones que no se usaban y una variable que tapaba a una función del mismo nombre.
+
+### Firmware
+- `instrumento.c`: el tiempo de compuerta de `FCNT` se acota antes de pasarlo a entero (un número enorme ya no puede dar un valor sin sentido), una verificación al compilar de que la ventana del osciloscopio entra en un envío USB, y comentarios al día. Mismo código en las dos placas; no cambia el protocolo, así que no hace falta recargar el firmware por esto.
+
 ---
 
 ## [0.9.0 beta] · 2026-10-31 · Módulo AD9833 y Bode hasta 10 MHz

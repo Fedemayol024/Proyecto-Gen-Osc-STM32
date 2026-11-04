@@ -1,6 +1,18 @@
-"""Pestaña Osciloscopio."""
+"""
+Pestaña Osciloscopio.
+
+Ciclo de funcionamiento (en RUN):
+  1. parametros_captura() calcula cuántos puntos (n), cuántos antes del disparo (pre) y a
+     qué frecuencia de muestreo (fs) pedir, según la base de tiempo (10 divisiones).
+  2. pedir() manda "CAP n pre fs fuente nivel flanco hist" a la placa.
+  3. La placa captura CH1 y CH2 a la vez, busca el disparo y devuelve "DATA ..." + datos.
+  4. al_recibir() -> _a_volts() pasa los códigos a volts (calibración, punta, acople).
+  5. _dibujar() dibuja lo visible, calcula las mediciones y la FFT, y se pide la próxima.
+
+Además: Single, Autoset, cursores, modo XY, persistencia (clase Fosforo), análisis de
+espectro (DialogoFFT) y exportar a CSV o imagen.
+"""
 from __future__ import annotations
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 
 import csv
 import math
@@ -9,6 +21,7 @@ import time
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QDialog, QCheckBox, QDoubleSpinBox, QFileDialog,
                                QGridLayout, QHBoxLayout, QHeaderView, QLabel, QScrollArea, QSlider,
                                QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
@@ -40,6 +53,8 @@ def curva_rapida(plot, color, ancho=1.0):
 
 
 class DialogoExportarImagen(QDialog):
+    """Elige qué canales y mediciones van en la imagen exportada."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Opciones de exportación de imagen")
@@ -424,6 +439,9 @@ class DialogoFFT(QDialog):
 
 
 class PanelCanal(QWidget):
+    """Controles de un canal: V/div, posición, entrada (modo de la placa), punta,
+    acople y si se ve."""
+
     def __init__(self, canal: int, cfg: dict, al_cambiar):
         super().__init__()
         self.canal = canal
@@ -460,6 +478,7 @@ class PanelCanal(QWidget):
 
     @property
     def factor(self) -> float:
+        """Multiplicador de la punta (×1 o ×10)."""
         return 10.0 if self.punta.currentText() == "×10" else 1.0
 
     @property
@@ -473,6 +492,9 @@ class PanelCanal(QWidget):
 
 
 class TabOsciloscopio(QWidget):
+    """Pestaña Osciloscopio: pide capturas, las pasa a volts y las dibuja con mediciones,
+    cursores, FFT, modo XY y persistencia."""
+
     def __init__(self, ventana):
         super().__init__()
         self.v = ventana
@@ -734,6 +756,7 @@ class TabOsciloscopio(QWidget):
         return TDIVS[self.tdiv.currentIndex()]
 
     def recta(self, c: int) -> M.Recta:
+        """Recta código -> volts de la entrada del canal c (calibrada o de diseño)."""
         return self.v.config.recta_entrada(c, self.canales[c].clave_entrada)
 
     # ------------------------------------------------------------ eje horizontal
@@ -777,6 +800,9 @@ class TabOsciloscopio(QWidget):
 
     # ------------------------------------------------------------ adquisición
     def parametros_captura(self):
+        """(n, pre, fs, fuente, nivel, flanco) de la próxima captura según la base de tiempo,
+        la posición del disparo y el modo. En bases rápidas se pide una pantalla extra a cada
+        lado para poder desplazar la vista sin otra captura."""
         fsmax = self.v.disp.info.get("osc_fsmax", 1.6e6) if self.v.disp.esta_conectado else 1.6e6
         tdiv = self.t_div
         fs = min(PUNTOS_DIV / tdiv, fsmax)
@@ -800,6 +826,7 @@ class TabOsciloscopio(QWidget):
         return n, pre, fs, fuente, nivel_cod, flanco
 
     def pedir(self):
+        """Pide una captura con los parámetros actuales y anota cuánto puede tardar."""
         if not self.v.disp.esta_conectado:
             return
         n, pre, fs, fuente, nivel, flanco = self.parametros_captura()
@@ -810,6 +837,7 @@ class TabOsciloscopio(QWidget):
         self.timeout = total / fs + 1.5
 
     def _vigilar(self):
+        """Cada tanto: si la captura no llegó a tiempo, se vuelve a pedir."""
         if self.v.dueno_captura != "osc" and self.v.dueno_captura is not None:
             return
         if self.esperando and time.monotonic() - self.t_pedido > self.timeout:
@@ -831,6 +859,7 @@ class TabOsciloscopio(QWidget):
         return accion is not None
 
     def al_conectar(self):
+        """Al conectar arranca en RUN."""
         self.esperando = False
         self.accion_pendiente = None
         if not self.corriendo:
@@ -842,6 +871,8 @@ class TabOsciloscopio(QWidget):
         self._set_run(False)
 
     def al_recibir(self, d: dict):
+        """Llega una captura: en modo Normal o Single sin disparo se descarta y se pide otra;
+        si no, se muestra y (en RUN) se pide la siguiente."""
         self.esperando = False
         if self._ejecutar_pendiente():      # esta captura era de antes del botón
             return
@@ -865,6 +896,8 @@ class TabOsciloscopio(QWidget):
             self.pedir()
 
     def _a_volts(self, d: dict, suavizar: bool = True) -> dict:
+        """Códigos del ADC -> volts (calibración y punta), suavizado opcional y acople AC
+        (se resta la media)."""
         r = {"fs": d["fs"], "pre": d["pre"], "n": d["n"], "disparado": d["disparado"]}
         
         # Tamaño de la ventana de suavizado ("Desactivado"=0, "x4"=1, "x8"=2...)
@@ -893,6 +926,7 @@ class TabOsciloscopio(QWidget):
             self._fps_n, self._fps_t = 0, ahora
 
     def _dibujar(self, nuevo: bool = False):
+        """Dibuja la parte visible de la captura, las mediciones, la FFT y el estado."""
         self._actualizar_ceros()
         u = self.ultimo
         if not u:
@@ -941,6 +975,8 @@ class TabOsciloscopio(QWidget):
 
     # ------------------------------------------------------------ controles
     def _cambio(self, *_):
+        """Cambió algún control: borra el rastro de persistencia, redibuja y guarda la
+        configuración."""
         if hasattr(self, "fosforo"):
             self.fosforo.borrar()          # las escalas cambiaron: el rastro viejo ya no coincide
         self.marca_disparo.setPos(self._x0())
@@ -952,7 +988,7 @@ class TabOsciloscopio(QWidget):
             self.linea_nivel.blockSignals(True)
             self.linea_nivel.setPos(self.nivel.valor() / p.v_div + p.pos.valor())
             self.linea_nivel.blockSignals(False)
-        n, pre, fs, *_ = self.parametros_captura()
+        n, _, fs, *_ = self.parametros_captura()
         self.lbl_fs.setText(f"Muestreo: {M.si(fs, 'S/s', 3)} · {n} puntos")
         if self.t_div <= TDIV_DESPLAZ_MAX:
             self.lbl_desplaz.setText(f"Desplazamiento: {self.desplaz.value() / 10:+.1f} div".replace(".", ","))
@@ -1049,6 +1085,7 @@ class TabOsciloscopio(QWidget):
         return ult
 
     def _dibujar_fft(self, u: dict, i0: int, i1: int, fs: float, nuevo: bool):
+        """Espectro de la captura (con promedio y marcado de picos si están activos)."""
         cfg = self.fft_cfg
         fuerza = RUIDO_FFT[cfg["ruido"]][1]
         datos = {}
@@ -1116,6 +1153,7 @@ class TabOsciloscopio(QWidget):
         self.lbl_cursores.setText("    ".join(partes))
 
     def _set_run(self, si: bool):
+        """Cambia el estado RUN/STOP y el color del botón."""
         self.corriendo = si
         self.btn_run.setText("RUN" if si else "STOP")
         self.btn_run.setProperty("corriendo", "true" if si else "false")
@@ -1123,8 +1161,13 @@ class TabOsciloscopio(QWidget):
         self.btn_run.style().polish(self.btn_run)
 
     def _alternar_run(self):
+        """Botón RUN/STOP."""
         if not self.v.disp.esta_conectado:
             self.v.estado("Conectá la placa primero.", W.ALERTA)
+            return
+        aviso = self.v.captura_ocupada("osc")
+        if aviso:
+            self.v.estado(aviso, W.ALERTA)
             return
         self.unico = False
         self.accion_pendiente = None
@@ -1137,8 +1180,13 @@ class TabOsciloscopio(QWidget):
     # camino: el firmware hasta la 0.8.19 abortaba la captura a la mitad y el
     # ADC quedaba trabado (el trazo se congelaba hasta reconectar la placa).
     def _unico(self):
+        """Botón Single: una sola captura disparada (espera si hay otra en camino)."""
         if not self.v.disp.esta_conectado:
             self.v.estado("Conectá la placa primero.", W.ALERTA)
+            return
+        aviso = self.v.captura_ocupada("osc")
+        if aviso:
+            self.v.estado(aviso, W.ALERTA)
             return
         if self.esperando:
             self.accion_pendiente = "unico"
@@ -1157,8 +1205,13 @@ class TabOsciloscopio(QWidget):
 
     # ------------------------------------------------------------ autoset
     def _autoset(self):
+        """Botón Autoset: busca la señal y ajusta las escalas solo."""
         if not self.v.disp.esta_conectado:
             self.v.estado("Conectá la placa primero.", W.ALERTA)
+            return
+        aviso = self.v.captura_ocupada("osc")
+        if aviso:
+            self.v.estado(aviso, W.ALERTA)
             return
         self.v.estado("Autoset: buscando la señal…", W.TEXTO)
         if self.esperando:
@@ -1179,6 +1232,9 @@ class TabOsciloscopio(QWidget):
         self.timeout = 8192 / fs + 1.5
 
     def _autoset_paso(self, d):
+        """Paso del Autoset: si no ve al menos 3 períodos, baja fs diez veces y vuelve a
+        capturar; si los ve, elige la base de tiempo (~2,5 períodos en pantalla), los V/div
+        y el disparo en la media de la señal."""
         u = self._a_volts(d)
         fs = u["fs"]
         fuente = 1 if self.canales[1].visible.isChecked() or not self.canales[2].visible.isChecked() else 2
@@ -1254,6 +1310,7 @@ class TabOsciloscopio(QWidget):
         self.v.estado(f"Guardado: {ruta}", W.OK)
 
     def _exportar_png(self):
+        """Guarda una imagen de la pantalla con las mediciones elegidas."""
         if not self.ultimo:
             return
         

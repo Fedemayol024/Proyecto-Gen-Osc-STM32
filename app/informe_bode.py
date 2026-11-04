@@ -1,15 +1,13 @@
-"""Informe en PDF de un barrido de Bode (A4, tema claro, para imprimir).
+"""
+Informe en PDF de un barrido de Bode (A4, tema claro, para imprimir).
 
-Se dibuja todo con Qt (QPdfWriter + QPainter): no hace falta ninguna librería extra y los
-gráficos quedan vectoriales. Contenido:
-  1. Datos del ensayo, resumen, tabla indexada de frecuencias características y H(s).
-  2. Bode de ganancia y fase: medición (puntos) contra el modelo ajustado (punteado).
-  3. Constelación de polos y ceros en el plano s y error del ajuste punto por punto.
-  4. Anexo: todos los puntos medidos.
+Se dibuja directamente con QPainter sobre un QPdfWriter, midiendo todo en milímetros (clase
+Documento). Páginas: datos del ensayo y resumen con la tabla de frecuencias características
+y H(s); ganancia y fase (medición contra modelo); plano s con polos y ceros y error del
+ajuste; anexo con todos los puntos medidos. La función de entrada es generar().
 """
 from __future__ import annotations
 
-import datetime as dt
 import math
 
 import numpy as np
@@ -290,6 +288,7 @@ def grafico_frecuencia(doc: Documento, x, y, w, h, titulo, unidad, f, medida,
 
 
 def leyenda(doc: Documento, x, y, color):
+    """Leyenda de los gráficos: medición, modelo y puntos descartados."""
     p = doc.p
     p.setPen(Qt.NoPen)
     p.setBrush(QBrush(color))
@@ -546,6 +545,3 @@ def generar(ruta: str, resultados: list, modelo: "M.ModeloBode | None", analisis
     doc.terminar()
     return paginas
 
-
-def meta_por_defecto() -> dict:
-    return {"Fecha": dt.datetime.now().strftime("%d/%m/%Y %H:%M")}

@@ -1,4 +1,12 @@
-"""Pestaña Generador (2 canales)."""
+"""
+Pestaña Generador (2 canales del DAC de la placa + módulo AD9833).
+
+Cada canal (PanelGenerador) arma con modelo.armar_tabla() una tabla de 4096 códigos con un
+período de la forma elegida y la manda a la placa ("GTBL"); el firmware la recorre con DMA
+a la velocidad necesaria para la frecuencia pedida ("GSET"). Modulación AM/FM ("GMOD") y
+barrido ("GSWP") los hace el firmware. Los cambios se juntan 80 ms y solo se mandan los
+comandos que cambiaron, para no saturar el USB mientras se gira una perilla.
+"""
 from __future__ import annotations
 
 from dataclasses import asdict, fields
@@ -6,8 +14,7 @@ from dataclasses import asdict, fields
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QScrollArea,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
 
 import modelo as M
 import widgets as W
@@ -17,6 +24,9 @@ COLORES = {1: W.CH1, 2: W.CH2}
 
 
 class PanelGenerador(QWidget):
+    """Controles de un canal del generador: forma, frecuencia, amplitud, offset, fase,
+    modulación y barrido, con una vista previa de un período."""
+
     def __init__(self, tab, canal: int, datos: dict):
         super().__init__()
         self.tab, self.canal = tab, canal
@@ -96,6 +106,7 @@ class PanelGenerador(QWidget):
 
     # ------------------------------------------------------------------
     def _leer(self):
+        """Pasa los controles a la configuración del canal y arma la tabla."""
         c = self.c
         c.habilitado = self.hab.isChecked()
         c.modo_salida = next(k for k, m in M.MODOS_SALIDA.items() if m.nombre == self.salida.currentText())
@@ -108,6 +119,7 @@ class PanelGenerador(QWidget):
         c.bar_f1, c.bar_f2, c.bar_t = self.bar_f1.valor(), self.bar_f2.valor(), self.bar_t.valor()
 
     def _actualizar_visibles(self):
+        """Muestra solo los controles que tienen sentido para la forma y la modulación elegidas."""
         f = self.forma.currentText()
         self.fila_ciclo.setVisible(f in ("Cuadrada", "Triangular"))
         self.fila_ciclo.layout().itemAt(0).widget().setText("Simetría" if f == "Triangular" else "Ciclo útil")
@@ -129,12 +141,14 @@ class PanelGenerador(QWidget):
         self.vpp.set_rango(0, hi - lo)
 
     def recta(self) -> M.Recta:
+        """Recta de la salida de este canal en el modo elegido."""
         return self.tab.v.config.recta_salida(self.canal, self.c.modo_salida)
 
     def _alternar(self):
         self._cambio()
 
     def _cambio(self, *_):
+        """Algo cambió: relee, redibuja la vista previa y programa el envío."""
         self._leer()
         self._actualizar_visibles()
         self.tabla = M.armar_tabla(self.c, self.recta(), self.arbitraria)
@@ -149,6 +163,7 @@ class PanelGenerador(QWidget):
         self.tab.actualizar_vista()
 
     def _cargar_csv(self):
+        """Carga una forma arbitraria desde un CSV o TXT (una columna de valores)."""
         ruta, _ = QFileDialog.getOpenFileName(self, "Forma de onda arbitraria", "",
                                               "Datos (*.csv *.txt);;Todos (*.*)")
         if not ruta:
@@ -184,6 +199,8 @@ class PanelGenerador(QWidget):
 
 
 class TabGenerador(QWidget):
+    """Pestaña Generador: los dos canales del DAC y el panel del AD9833."""
+
     def __init__(self, ventana):
         super().__init__()
         self.v = ventana
@@ -256,6 +273,7 @@ class TabGenerador(QWidget):
         return "dds_mod" in self.v.disp.info
 
     def reenviar_dds(self):
+        """Vuelve a mandar toda la configuración del AD9833."""
         self._dds_enviado = None
         self.dds.frec_real = None
         self.programar_envio_dds()
@@ -287,11 +305,13 @@ class TabGenerador(QWidget):
             self.curvas[c].setData(x, p.tabla.volts[idx])
 
     def programar_envio(self, canal: int):
+        """Anota que el canal cambió y manda todo junto 80 ms después."""
         self._pendientes.add(canal)
         self.temporizador.start(80)
         self.v.guardar_config_pronto()
 
     def reenviar_todo(self):
+        """Vuelve a mandar todo (al conectar o después de una calibración)."""
         self._ultimo_enviado = {1: None, 2: None}
         self._fases_enviadas = None
         self._dds_enviado = None
@@ -300,6 +320,8 @@ class TabGenerador(QWidget):
         self._enviar()
 
     def _enviar(self):
+        """Manda lo pendiente: tabla y comandos de cada canal que cambió (solo lo distinto a lo
+        que ya tiene la placa) y la configuración del AD9833."""
         if not self.v.disp.esta_conectado:
             return
         if "dds" in self._pendientes:
@@ -333,11 +355,13 @@ class TabGenerador(QWidget):
             self.v.disp.enviar("GSYNC")
 
     def sincronizar(self):
+        """Reinicia los dos canales a la vez para que la fase entre ellos sea la elegida."""
         if self.v.disp.esta_conectado:
             self.v.disp.enviar("GSYNC")
             self.v.estado("Fases sincronizadas.", W.OK)
 
     def al_linea(self, linea: str):
+        """Respuestas de la placa (OK GSET con la frecuencia real, etc.)."""
         p = linea.split()
         if linea.startswith("OK GSET") and len(p) >= 4:
             try:

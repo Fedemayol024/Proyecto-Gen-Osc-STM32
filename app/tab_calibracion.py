@@ -1,11 +1,17 @@
-"""Pestaña Calibración: salidas con multímetro y entradas con el generador."""
-from __future__ import annotations
+"""
+Pestaña Calibración: corrige las diferencias entre el diseño y la placa real.
 
-import time
+  - Salidas: la app pone dos códigos del DAC, el usuario mide las tensiones con un
+    multímetro y se guarda la recta código -> tensión de cada canal.
+  - Entradas: automática. El generador pone dos tensiones conocidas en OUT1/OUT2 unidas a
+    IN1/IN2 y se lee qué código da el ADC; con eso se arma la recta de cada entrada.
+    «Corregir cero» mide las entradas en vacío y ajusta solo el desplazamiento.
+"""
+from __future__ import annotations
 
 import numpy as np
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QWidget
 
 import modelo as M
 import widgets as W
@@ -14,6 +20,8 @@ COD_A, COD_B = 600, 3500          # zona lineal del DAC
 
 
 class TabCalibracion(QWidget):
+    """Pestaña Calibración (ver el encabezado del archivo)."""
+
     def __init__(self, ventana):
         super().__init__()
         self.v = ventana
@@ -81,6 +89,7 @@ class TabCalibracion(QWidget):
         return c, m
 
     def _poner(self, cod):
+        """Pone en la salida el código del punto de calibración elegido."""
         if not self.v.disp.esta_conectado:
             self.v.estado("Conectá la placa primero.", W.ALERTA)
             return
@@ -92,6 +101,8 @@ class TabCalibracion(QWidget):
         self.lbl_s.setText(f"Salida CH{c} en código {cod}. Medí y escribí el valor.")
 
     def _guardar_salida(self):
+        """Guarda la recta de una salida con las dos tensiones medidas (rechaza valores muy
+        lejos del diseño: suele ser un error de medición o de modo)."""
         c, m = self._canal_modo()
         try:
             (ca, ea), (cb, eb) = self.medidas
@@ -124,8 +135,13 @@ class TabCalibracion(QWidget):
         return -a, a
 
     def _autocal(self):
+        """Autocalibración de las entradas: dos niveles conocidos desde el generador."""
         if not self.v.disp.esta_conectado:
             self.v.estado("Conectá la placa primero.", W.ALERTA)
+            return
+        aviso = self.v.captura_ocupada("cal")
+        if aviso:
+            self.v.estado(aviso, W.ALERTA)
             return
         self.v.tab_osc._set_run(False)
         self.v.cancelar_captura()
@@ -134,6 +150,7 @@ class TabCalibracion(QWidget):
         self._auto_poner()
 
     def _auto_poner(self):
+        """Pone el nivel del paso actual en las dos salidas y espera a que se asiente."""
         paso = self.auto["paso"]
         for c in (1, 2):
             niveles = self._niveles(c)
@@ -155,6 +172,8 @@ class TabCalibracion(QWidget):
         self.v.pedir_captura("cal", 2000, 0, 100000)
 
     def al_recibir(self, d):
+        """Captura de la calibración: corrige el cero, o junta los dos niveles y arma la recta
+        de cada entrada."""
         if not self.auto and not self.cero:
             return
         if self.cero:
@@ -195,11 +214,25 @@ class TabCalibracion(QWidget):
         self.v.tab_gen.reenviar_todo()
 
     def _cero(self):
+        """«Corregir cero»: mide las entradas sin señal."""
         if not self.v.disp.esta_conectado:
+            return
+        aviso = self.v.captura_ocupada("cal")
+        if aviso:
+            self.v.estado(aviso, W.ALERTA)
             return
         self.v.tab_osc._set_run(False)
         self.cero = True
         self.v.pedir_captura("cal", 2000, 0, 100000)
+
+    def al_desconectar(self):
+        """Si se corta la placa a mitad de una calibración, se cancela (si no, el botón
+        quedaba deshabilitado y la app creía que seguía calibrando)."""
+        if self.auto or self.cero:
+            self.t.stop()
+            self.auto, self.cero = None, False
+            self.btn_auto.setEnabled(True)
+            self.lbl_e.setText("Calibración cancelada: se desconectó la placa.")
 
     def _diseno_entrada(self):
         for c in (1, 2):

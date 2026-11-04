@@ -1,6 +1,18 @@
 """
-Modelo del instrumento: calibraciones, conversión tensión <-> código y
-armado de las tablas de forma de onda. No depende de la interfaz.
+Modelo del instrumento: todos los cálculos, sin nada de interfaz gráfica (por eso se puede
+probar solo, con los tests). Las pestañas lo importan como «M».
+
+Secciones (en este orden):
+  - Recta código <-> tensión: conversión y calibración del DAC (salidas) y del ADC (entradas).
+  - Salidas y entradas: valores de diseño de las etapas analógicas de la placa adicional.
+  - Formas de onda y armado de la tabla de 4096 puntos del generador.
+  - Mediciones del osciloscopio (Vpp, RMS, frecuencia, ciclo útil...).
+  - Bode: largo de cada captura, ajuste senoidal (fasor), submuestreo para el AD9833,
+    estimación de la frecuencia y ajuste de un modelo de polos y ceros.
+  - Espectro (FFT): ventanas, promedio, piso de ruido, picos y armónicos.
+  - Persistencia (fósforo) y formato de números con coma decimal.
+  - Placas soportadas, módulo AD9833 (frecuencia, fase y amplitud reales, comandos).
+  - Preferencias (placa elegida, resolución) y configuración guardada de cada placa.
 """
 from __future__ import annotations
 
@@ -23,6 +35,8 @@ VREF = 3.3
 # ---------------------------------------------------------------------------
 @dataclass
 class Recta:
+    """Recta que pasa un código (DAC o ADC, 0–4095) a tensión y al revés. Se define por dos
+    puntos (código, tensión); una calibración es justamente guardar esos dos puntos."""
     codigo_a: float
     volt_a: float
     codigo_b: float
@@ -73,6 +87,7 @@ DAC_V_MIN, DAC_V_MAX = 0.2, 3.1
 
 @dataclass(frozen=True)
 class ModoSalida:
+    """Modo de una salida del generador: con la placa adicional (±5 V) o el pin directo."""
     clave: str
     nombre: str
     vmin: float
@@ -110,6 +125,7 @@ def _vadc(c):
 
 @dataclass(frozen=True)
 class ModoEntrada:
+    """Modo de una entrada del osciloscopio: ±10 V, ±1 V (×10) o el pin directo."""
     clave: str
     nombre: str
     rango: float          # ± tensión de entrada aproximada (para la interfaz)
@@ -190,6 +206,7 @@ def leer_csv_forma(ruta: str) -> np.ndarray:
 
 @dataclass
 class CanalGen:
+    """Configuración de un canal del generador tal como la elige el usuario."""
     habilitado: bool = True
     forma: str = "Senoidal"
     frecuencia: float = 1000.0
@@ -210,6 +227,8 @@ class CanalGen:
 
 @dataclass
 class TablaGen:
+    """Resultado de armar_tabla(): los 4096 códigos que se mandan a la placa y datos
+    para el panel (tensión real, si se recortó, código de reposo y del centro)."""
     codigos: np.ndarray          # uint16, TABLA_N
     volts: np.ndarray            # lo que sale de verdad (simulado)
     recortada: bool
@@ -228,6 +247,9 @@ def limites_salida(modo: ModoSalida, cal: Recta) -> tuple[float, float]:
 
 
 def armar_tabla(c: CanalGen, cal: Recta, arbitraria: np.ndarray | None = None) -> TablaGen:
+    """Convierte la configuración de un canal en la tabla de 4096 códigos del DAC: forma ×
+    amplitud + offset, recortada a lo que la salida puede dar y pasada a códigos con la
+    calibración."""
     modo = MODOS_SALIDA[c.modo_salida]
     lo, hi = limites_salida(modo, cal)
     norm = forma_normalizada(c.forma, c.ciclo, arbitraria)
@@ -250,6 +272,9 @@ def armar_tabla(c: CanalGen, cal: Recta, arbitraria: np.ndarray | None = None) -
 # Mediciones sobre una señal muestreada
 # ---------------------------------------------------------------------------
 def medir(v: np.ndarray, fs: float) -> dict:
+    """Mediciones del osciloscopio sobre una señal en volts: Vmáx, Vmín, Vpp, media, RMS y, si
+    es periódica, frecuencia, período y ciclo útil (cruces por la media con histéresis del
+    10 % de Vpp, para que el ruido no cuente cruces de más)."""
     if v is None or len(v) < 4:
         return {}
     vmax, vmin = float(v.max()), float(v.min())
@@ -386,14 +411,14 @@ def estimar_frecuencia(v: np.ndarray, fs: float, f_aprox: float, bins: float = 4
     n = len(v)
     if n < 16:
         return f_aprox
-    espectro = np.abs(np.fft.rfft((v - v.mean()) * np.hanning(n)))
+    esp = np.abs(np.fft.rfft((v - v.mean()) * np.hanning(n)))
     df = fs / n
     k0 = f_aprox / df
-    lo, hi = max(1, int(math.floor(k0 - bins))), min(len(espectro) - 2, int(math.ceil(k0 + bins)))
+    lo, hi = max(1, int(math.floor(k0 - bins))), min(len(esp) - 2, int(math.ceil(k0 + bins)))
     if hi <= lo:
         return f_aprox
-    k = lo + int(np.argmax(espectro[lo:hi + 1]))
-    a, b, c = np.log(espectro[k - 1:k + 2] + 1e-30)
+    k = lo + int(np.argmax(esp[lo:hi + 1]))
+    a, b, c = np.log(esp[k - 1:k + 2] + 1e-30)
     den = a - 2 * b + c
     delta = 0.5 * (a - c) / den if den < 0 else 0.0
     f = (k + max(-0.5, min(0.5, delta))) * df
@@ -447,7 +472,7 @@ def captura_bode_dds(f: float, fs_max: float, ventana: int = 8192) -> tuple[int,
 # ---------------------------------------------------------------------------
 # Bode: ajuste de un modelo (polos y ceros) a la curva medida
 # ---------------------------------------------------------------------------
-# Se ajusta H(s) = N(s)/D(s) de orden 1 y 2 (Sanathanan–Koerner: mínimos cuadrados lineales
+# Se ajusta H(s) = N(s)/D(s) de orden 1 a 3 (Sanathanan–Koerner: mínimos cuadrados lineales
 # iterados) con pesos robustos: los puntos que no encajan (autorresonancias lejanas, acople)
 # pesan poco y no arruinan el ajuste. Se elige el más simple que explique la curva y se
 # describe en palabras: tipo de respuesta, polos, ceros, Q y −3 dB desde la meseta correcta.
@@ -456,6 +481,8 @@ BODE_ORDENES = [(0, 1), (1, 1), (0, 2), (1, 2), (2, 2), (2, 1), (3, 2), (2, 3), 
 
 @dataclass
 class ModeloBode:
+    """Modelo ajustado H(s) = N(s)/D(s). Los coeficientes están en potencias de s/ω0 (ω0 =
+    centro geométrico del barrido) para que los números queden de tamaño parecido."""
     num: np.ndarray                  # coeficientes en s/ω0, de menor a mayor grado
     den: np.ndarray                  # den[0] = 1
     w0: float                        # escala de frecuencia (rad/s)
@@ -493,6 +520,9 @@ def _resolver(x, H, n, d, w):
 
 
 def ajustar_bode(f, H, n, d, iter_sk=12, iter_robusto=6) -> ModeloBode | None:
+    """Ajusta un modelo con numerador de grado n y denominador de grado d: iteraciones de
+    Sanathanan–Koerner (mínimos cuadrados lineales) dentro de un ajuste robusto que le baja
+    el peso a los puntos que no encajan. None si no se pudo o si da un modelo inestable."""
     f = np.asarray(f, dtype=float)
     H = np.asarray(H, dtype=complex)
     w0 = 2 * np.pi * math.sqrt(f.min() * f.max())
@@ -533,6 +563,8 @@ def ajustar_bode(f, H, n, d, iter_sk=12, iter_robusto=6) -> ModeloBode | None:
 
 
 def mejor_modelo_bode(f, H) -> ModeloBode | None:
+    """Prueba todos los órdenes de BODE_ORDENES y elige el de menor puntaje: error del ajuste
+    + una penalización por complejidad + otra por puntos descartados."""
     candidatos = []
     for n, d in BODE_ORDENES:
         try:
@@ -788,19 +820,6 @@ def quitar_piso(p: np.ndarray, piso: np.ndarray, fuerza: float = 2.0, resto: flo
     return np.maximum(p - fuerza * piso, resto * piso)
 
 
-def _interp_parabolica(db: np.ndarray, i: int) -> tuple[float, float]:
-    """Corrección de posición (en bins) y nivel del pico por ajuste de una parábola."""
-    if i <= 0 or i >= len(db) - 1:
-        return 0.0, float(db[i])
-    a, b, c = db[i - 1], db[i], db[i + 1]
-    den = a - 2 * b + c
-    if den >= 0:
-        return 0.0, float(b)
-    d = 0.5 * (a - c) / den
-    d = float(np.clip(d, -0.5, 0.5))
-    return d, float(b - 0.25 * (a - c) * d)
-
-
 def _centroide(p: np.ndarray, k: int, medio: int) -> float:
     """Corrección (en bins) de la frecuencia de un pico por el centro de masa de su lóbulo.
     Funciona con cualquier ventana, también con la flat-top (que tiene el pico plano)."""
@@ -995,6 +1014,7 @@ _SUF = {"G": 1e9, "M": 1e6, "k": 1e3, "K": 1e3, "m": 1e-3, "u": 1e-6, "µ": 1e-6
 
 
 def si(valor, unidad: str = "", cifras: int = 4) -> str:
+    """Número con prefijo SI y coma decimal: si(1500, 'Hz') -> '1,5 kHz'."""
     if valor is None or not math.isfinite(valor):
         return "—"
     if valor == 0:
@@ -1028,12 +1048,9 @@ def leer_si(texto: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Configuración persistente
+# Placas soportadas y carpeta donde se guarda la configuración
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Placas soportadas
-# ---------------------------------------------------------------------------
-# Clave = lo que responde el firmware a "ID?" ("INSTR-F767 v0.8.19" -> "F767").
+# Clave = lo que responde el firmware a "ID?" ("INSTR-F767 v0.9.0" -> "F767").
 PLACAS = {
     "F767": {"nombre": "NUCLEO-F767ZI",
              "detalle": "Cortex-M7 · 216 MHz · osciloscopio hasta ~1,6 MS/s"},
@@ -1086,6 +1103,8 @@ def _num(v, defecto: float, vmin: float, vmax: float) -> float:
 
 @dataclass
 class ConfigDDS:
+    """Configuración del módulo AD9833: frecuencia, forma, amplitud, fase, modulación, reloj
+    real del módulo y calibración de la amplitud."""
     habilitado: bool = False
     forma: str = "Seno"
     frecuencia: float = 100e3
@@ -1109,6 +1128,8 @@ class ConfigDDS:
 
     @staticmethod
     def desde_dict(d: dict | None) -> "ConfigDDS":
+        """Lee la configuración guardada; los campos que falten o sean inválidos vuelven al
+        valor por defecto (así un archivo viejo no rompe la app)."""
         c = ConfigDDS()
         d = d if isinstance(d, dict) else {}
         c.habilitado = bool(d.get("habilitado", False))
@@ -1243,6 +1264,7 @@ def dds_mclk_corregido(mclk_actual: float, f_pedida: float, f_medida: float) -> 
 
 
 def dds_texto_modulacion(c: ConfigDDS) -> str:
+    """Comando DDSMOD que corresponde a la modulación elegida."""
     m = c.modulacion
     if m == "Barrido":
         return f"DDSMOD {'LOG' if c.bar_log else 'LIN'} {c.bar_f1:.4f} {c.bar_f2:.4f} {c.bar_t:.4f}"
@@ -1271,6 +1293,9 @@ def dds_comandos(c: ConfigDDS, extendido: bool = True) -> list[str]:
             dds_texto_modulacion(c)]
 
 
+# ---------------------------------------------------------------------------
+# Preferencias de la app (placa elegida, si preguntar al abrir, resolución de la interfaz)
+# ---------------------------------------------------------------------------
 def ruta_preferencias() -> Path:
     return carpeta_config() / "preferencias.json"
 
@@ -1345,8 +1370,13 @@ def guardar_preferencias(pref: dict):
         pass
 
 
+# ---------------------------------------------------------------------------
+# Configuración guardada de cada placa (config_<placa>.json)
+# ---------------------------------------------------------------------------
 @dataclass
 class Config:
+    """Configuración de una placa, guardada en config_<placa>.json: puerto, calibraciones de
+    salidas y entradas y el estado de cada pestaña."""
     puerto: str | None = None
     cal_salida: dict = field(default_factory=dict)     # "1:PLACA" -> Recta dict
     cal_entrada: dict = field(default_factory=dict)    # "1:ALTO"  -> Recta dict
@@ -1356,10 +1386,12 @@ class Config:
     placa: str = PLACA_POR_DEFECTO      # a qué placa pertenece esta configuración
 
     def recta_salida(self, canal: int, modo: str) -> Recta:
+        """Recta de una salida: la calibrada si existe, si no la de diseño."""
         r = Recta.desde_dict(self.cal_salida.get(f"{canal}:{modo}", {}))
         return r or MODOS_SALIDA[modo].diseno
 
     def recta_entrada(self, canal: int, modo: str) -> Recta:
+        """Recta de una entrada: la calibrada si existe, si no la de diseño."""
         r = Recta.desde_dict(self.cal_entrada.get(f"{canal}:{modo}", {}))
         return r or MODOS_ENTRADA[modo].diseno
 

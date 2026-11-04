@@ -8,7 +8,7 @@
  *   - los datos del osciloscopio que manda la placa después de "DATA"
  *
  * Comandos (ver también LEEME.md):
- *   ID?                         -> INSTR-F767 v0.8.18  (o INSTR-F429 v0.8.18)
+ *   ID?                         -> INSTR-F767 vX.Y.Z  (o INSTR-F429 vX.Y.Z; INSTR_VERSION)
  *   INFO?                       -> INFO gen_fs=.. osc_fsmax=.. tabla=4096 ventana=8192 ..
  *                                  reinicio=watchdog|energia|boton|software|otro
  *   GTBL c n suma  + 2n bytes   -> OK GTBL c        (tabla de c = 1|2, uint16 LE)
@@ -91,6 +91,9 @@ static uint32_t tx_pend_len = 0;
 static uint32_t tx_perdidas = 0;       /* respuestas descartadas, sin avisar todavía */
 static uint32_t tx_perdidas_total = 0;
 static char tx_envio[TX_TEXTO];
+/* CDC_Transmit_FS recibe el largo en 16 bits: la ventana más grande (4 bytes por
+ * punto) tiene que entrar en un solo envío. */
+_Static_assert(OSC_MAX_VENTANA * 4u <= 65535u, "la ventana del osciloscopio no entra en un envio USB");
 static char cab_datos[96];
 
 typedef enum { TRAMA_NO = 0, TRAMA_CABECERA, TRAMA_DATOS, TRAMA_ESPERA_FIN } trama_t;
@@ -110,18 +113,19 @@ static int usb_tx_libre(void)
   return h->TxState == 0u;
 }
 
+/* Agrega una línea de respuesta a la cola de salida (la manda tx_atender). */
 static void responder(const char *fmt, ...)
 {
-  char linea[256];
+  char resp[256];
   va_list ap;
   va_start(ap, fmt);
-  int n = vsnprintf(linea, sizeof(linea) - 1u, fmt, ap);
+  int n = vsnprintf(resp, sizeof(resp) - 1u, fmt, ap);
   va_end(ap);
   if (n < 0) return;
-  if ((uint32_t)n > sizeof(linea) - 2u) n = (int)sizeof(linea) - 2;
-  linea[n++] = '\n';
+  if ((uint32_t)n > sizeof(resp) - 2u) n = (int)sizeof(resp) - 2;
+  resp[n++] = '\n';
   if (tx_pend_len + (uint32_t)n <= TX_TEXTO) {
-    memcpy(&tx_pend[tx_pend_len], linea, (size_t)n);
+    memcpy(&tx_pend[tx_pend_len], resp, (size_t)n);
     tx_pend_len += (uint32_t)n;
   } else {
     tx_perdidas++;
@@ -335,7 +339,11 @@ static void procesar_linea(char *l)
   if (!strcmp(c0, "FCNT")) {
     if (nt < 3 || !num(tok[1], &v[0]) || !num(tok[2], &v[1])) { responder("ERR FCNT: FCNT ms continuo"); return; }
     if (v[0] <= 0.0) { fcnt_detener(); responder("OK FCNT 0"); }
-    else { fcnt_medir((uint32_t)v[0], v[1] != 0.0); responder("OK FCNT %lu", (unsigned long)v[0]); }
+    else {
+      uint32_t ms = saturar_u32(v[0]);     /* fcnt_medir lo acota a 10..10000 ms */
+      fcnt_medir(ms, v[1] != 0.0);
+      responder("OK FCNT %lu", (unsigned long)ms);
+    }
     return;
   }
 

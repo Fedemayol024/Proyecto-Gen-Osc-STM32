@@ -1,10 +1,13 @@
-"""Panel del módulo AD9833 (generador DDS externo) para la pestaña Generador.
+"""
+Panel del módulo AD9833 (generador DDS externo) para la pestaña Generador.
 
-Incluye:
-- forma, frecuencia, fase y amplitud (en % del potenciómetro o en Vpp si está calibrado);
-- modulaciones hechas por el firmware: barrido, FSK, PSK, ráfaga y AM;
-- calibración de la amplitud (tabla de % → Vpp y tensión media medidos);
-- medición del reloj real del módulo con el frecuencímetro de la placa.
+  - PanelDDS: frecuencia, forma, amplitud (potenciómetro digital MCP41010), fase y
+    modulaciones (barrido, FSK, PSK, ráfaga, AM) que hace el firmware. Con la amplitud
+    calibrada se elige directamente en Vpp. «Medir reloj…» corrige el error del cristal
+    de 25 MHz del módulo usando el frecuencímetro.
+  - DialogoCalDDS: asistente para calibrar la amplitud (paso a paso con un multímetro u
+    osciloscopio, o automático con el CH1 de la placa).
+  - leer_tension(): entiende valores escritos como «906,25mV» o «1,48 Vpp».
 """
 from __future__ import annotations
 
@@ -267,6 +270,7 @@ class DialogoCalDDS(QDialog):
 
     # ------------------------------------------------------------------ automático
     def _alternar_auto(self):
+        """Arranca o detiene la medición automática con CH1."""
         if self.auto:
             self._terminar_auto()
             self.panel.tab.v.estado("Medición automática detenida.", W.TENUE)
@@ -406,7 +410,6 @@ class PanelDDS(QWidget):
         self.tab = tab
         self.c = M.ConfigDDS.desde_dict(datos)
         self.frec_real = None
-        self.fase_real = None
         self._midiendo: dict | None = None
         self._dlg_cal: DialogoCalDDS | None = None
         raiz = QVBoxLayout(self)
@@ -529,6 +532,7 @@ class PanelDDS(QWidget):
 
     # ------------------------------------------------------------------ estado
     def _leer(self):
+        """Pasa lo que muestran los controles a la configuración (self.c)."""
         c = self.c
         c.habilitado = self.hab.isChecked()
         c.forma = self.forma.currentText()
@@ -545,6 +549,7 @@ class PanelDDS(QWidget):
         c.am_prof, c.am_frec = self.am_prof.valor(), self.am_frec.valor()
 
     def _cambio(self, *_):
+        """Algo cambió: relee y programa el envío a la placa."""
         self._leer()
         self._mostrar()
         self.tab.programar_envio_dds()
@@ -557,10 +562,12 @@ class PanelDDS(QWidget):
         self._cambio()
 
     def comandos(self) -> list[str]:
+        """Comandos para la placa con la configuración actual."""
         return M.dds_comandos(self.c, self.tab.dds_extendido())
 
     # ------------------------------------------------------------------ vista
     def _mostrar(self):
+        """Actualiza los textos: frecuencia real, amplitud en Vpp, rango de la salida y avisos."""
         c = self.c
         self.hab.setText("●  AD9833 ACTIVADO" if self.hab.isChecked() else "○  AD9833 APAGADO")
         for nombre, filas in self.filas_mod.items():
@@ -719,6 +726,8 @@ class PanelDDS(QWidget):
 
     # ------------------------------------------------------------------ medición del reloj
     def medir_reloj(self):
+        """«Medir reloj…»: saca una cuadrada de 1 MHz por VOUT, la mide con el frecuencímetro
+        (VOUT unido a D32) y corrige el valor del cristal del módulo."""
         v = self.tab.v
         if not v.disp.esta_conectado:
             v.estado("Conectá la placa primero.", W.ALERTA)
@@ -759,6 +768,7 @@ class PanelDDS(QWidget):
                           "a D32 y que el AD9833 esté alimentado.", W.ERROR)
 
     def al_linea(self, p: list[str]):
+        """Respuestas de la placa: frecuencia confirmada y resultado del frecuencímetro."""
         if p[0] == "OK" and len(p) >= 3 and p[1] == "DDS":
             try:
                 f = float(p[2])
@@ -767,11 +777,6 @@ class PanelDDS(QWidget):
             if self._midiendo is None:
                 self.frec_real = f
                 self._mostrar()
-        elif p[0] == "OK" and len(p) >= 3 and p[1] == "DDSF":
-            try:
-                self.fase_real = float(p[2])
-            except ValueError:
-                pass
         elif p[0] == "FREQ" and len(p) >= 2 and self._midiendo is not None:
             try:
                 f_med = float(p[1])

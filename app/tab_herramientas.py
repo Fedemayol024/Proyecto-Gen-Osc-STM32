@@ -1,14 +1,23 @@
-"""Pestaña Herramientas: frecuencímetro y salida PWM."""
+"""
+Pestaña Herramientas: frecuencímetro y salida PWM.
+
+  - Frecuencímetro (entrada D32): la placa elige sola entre contar flancos durante la
+    compuerta (frecuencias altas) o medir el tiempo entre flancos (frecuencias bajas) y
+    contesta "FREQ f método flancos ms".
+  - PWM: frecuencia, ciclo útil y tiempo muerto entre las dos salidas complementarias.
+"""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 import modelo as M
 import widgets as W
 
 
 class TabHerramientas(QWidget):
+    """Frecuencímetro (entrada D32) y salida PWM con tiempo muerto."""
+
     def __init__(self, ventana):
         super().__init__()
         self.v = ventana
@@ -75,6 +84,7 @@ class TabHerramientas(QWidget):
         return {"10 ms": 10, "100 ms": 100, "1 s": 1000, "10 s": 10000}[self.compuerta.currentText()]
 
     def _alternar_f(self):
+        """Botón Medir: arranca o detiene el frecuencímetro (comando FCNT)."""
         if not self.v.disp.esta_conectado:
             self.btn_f.setChecked(False)
             return
@@ -93,6 +103,7 @@ class TabHerramientas(QWidget):
         self.v.guardar_config_pronto()
 
     def _enviar_pwm(self):
+        """Manda la configuración del PWM (comando PWM)."""
         if not self.v.disp.esta_conectado:
             self.btn_pwm.setChecked(False)
             return
@@ -103,6 +114,7 @@ class TabHerramientas(QWidget):
         self.v.guardar_config_pronto()
 
     def al_linea(self, linea: str):
+        """Respuestas FREQ (frecuencímetro) y OK PWM (valores reales)."""
         p = linea.split()
         if p[0] == "FREQ" and len(p) >= 5:
             try:

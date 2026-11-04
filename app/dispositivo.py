@@ -1,10 +1,16 @@
 """
 Comunicación con la placa (NUCLEO-F767ZI o NUCLEO-F429ZI) por el puerto USB virtual.
 
-Un hilo lee continuamente: separa las líneas de texto y, cuando llega
-"DATA n pre fs disparado", lee los 4·n bytes binarios que siguen y los
-entrega ya separados en dos canales (códigos del ADC).
-Todo se informa con señales de Qt (seguras entre hilos).
+Protocolo: comandos y respuestas son líneas de texto terminadas en '\n' (por ejemplo
+"GSET 1 1000 0 1 2048" -> "OK GSET 1 1000"). Solo hay dos partes binarias:
+  - la tabla del generador que manda la PC después de "GTBL canal 4096 suma";
+  - los datos del osciloscopio que manda la placa después de "DATA n pre fs disparado":
+    4·n bytes, cada muestra es un entero de 32 bits con CH1 en los 16 bits bajos y CH2
+    en los 16 altos (así salen del ADC dual del STM32).
+
+Un hilo lee continuamente: separa las líneas de texto y, cuando llega una cabecera DATA,
+junta los bytes binarios y entrega los dos canales ya separados (códigos del ADC, 0–4095).
+Todo se informa con señales de Qt, que son seguras entre hilos.
 """
 from __future__ import annotations
 
@@ -16,7 +22,7 @@ import serial
 import serial.tools.list_ports
 from PySide6.QtCore import QObject, Signal
 
-ID_PREFIJO = "INSTR-"      # "INSTR-F767 v0.8.19" o "INSTR-F429 v0.8.19"
+ID_PREFIJO = "INSTR-"      # respuesta a ID?: "INSTR-F767 v0.9.0" o "INSTR-F429 v0.9.0"
 VID_ST, PID_CDC = 0x0483, 0x5740
 
 
@@ -39,6 +45,8 @@ def listar_puertos() -> list[tuple[str, str]]:
 
 
 class Dispositivo(QObject):
+    """Conexión con la placa. La interfaz llama a abrir/cerrar/enviar; la lectura corre
+    en un hilo propio y avisa con señales de Qt."""
     conectado = Signal(str)            # versión
     desconectado = Signal(str)         # motivo
     error = Signal(str)
@@ -50,6 +58,7 @@ class Dispositivo(QObject):
         self._ser: serial.Serial | None = None
         self._activo = False
         self._lock = threading.Lock()
+        self._intento = 0                  # sube en cada abrir/cerrar: invalida conexiones viejas
         self.puerto: str | None = None
         self.version: str | None = None
         self.placa: str | None = None      # placa que respondió ("F767", "F429")
@@ -58,13 +67,17 @@ class Dispositivo(QObject):
     # ------------------------------------------------------------------
     @property
     def esta_conectado(self) -> bool:
+        """True si hay una placa conectada que respondió."""
         return self._activo and self._ser is not None
 
     def abrir(self, puerto: str):
+        """Conecta en segundo plano (no congela la ventana); el resultado llega por las
+        señales conectado / error."""
         self.cerrar()
-        threading.Thread(target=self._conectar, args=(puerto,), daemon=True).start()
+        threading.Thread(target=self._conectar, args=(puerto, self._intento), daemon=True).start()
 
     def cerrar(self):
+        self._intento += 1                 # si había una conexión en curso, queda descartada
         self._activo = False
         ser, self._ser = self._ser, None
         if ser:
@@ -74,15 +87,19 @@ class Dispositivo(QObject):
                 pass
 
     def enviar(self, texto: str) -> bool:
+        """Manda un comando de texto (agrega el fin de línea)."""
         return self._escribir((texto.strip() + "\n").encode("ascii"))
 
     def enviar_tabla(self, canal: int, codigos: np.ndarray) -> bool:
+        """Manda una tabla del generador: cabecera GTBL con la suma de control y los
+        valores en binario (2 bytes por punto)."""
         cod = np.asarray(codigos, dtype="<u2")
         suma = int(cod.astype(np.uint64).sum()) & 0xFFFFFFFF
         cab = f"GTBL {canal} {len(cod)} {suma}\n".encode("ascii")
         return self._escribir(cab + cod.tobytes())
 
     def _escribir(self, datos: bytes) -> bool:
+        """Escribe en el puerto (con un candado: escriben la interfaz y otros hilos)."""
         ser = self._ser
         if not ser or not self._activo:
             return False
@@ -95,14 +112,16 @@ class Dispositivo(QObject):
             return False
 
     # ------------------------------------------------------------------
-    def _conectar(self, puerto: str):
+    def _conectar(self, puerto: str, intento: int):
+        """Hilo de conexión: abre el puerto, cancela cualquier captura vieja (CAPX) y pregunta
+        ID? e INFO? durante hasta 4 s. Si la placa contesta, arranca el hilo lector."""
         try:
             ser = serial.Serial(puerto, 115200, timeout=0.05, write_timeout=2)
         except serial.SerialException as e:
             m = str(e)
             if "PermissionError" in m or "Access is denied" in m or "denegado" in m:
                 m = f"{puerto} está ocupado por otro programa."
-            self.error.emit(m)
+            self._avisar_error(intento, m)
             return
         buf = b""
         version = None
@@ -135,11 +154,14 @@ class Dispositivo(QObject):
                                     info[k] = v          # texto (p. ej. reinicio=watchdog)
         except Exception as e:  # noqa: BLE001
             ser.close()
-            self.error.emit(f"Error de comunicación: {e}")
+            self._avisar_error(intento, f"Error de comunicación: {e}")
+            return
+        if intento != self._intento:       # mientras tanto se canceló o se pidió otra conexión
+            ser.close()
             return
         if not version:
             ser.close()
-            self.error.emit(f"La placa en {puerto} no respondió. Revisá: 1) el cable en el USB USER "
+            self._avisar_error(intento, f"La placa en {puerto} no respondió. Revisá: 1) el cable en el USB USER "
                             "(CN13); 2) que el LED azul LD2 parpadee (si no, falta instrumento_iniciar() "
                             "e instrumento_lazo() en main.c); 3) que CDC_Receive_FS de usbd_cdc_if.c "
                             "llame a instrumento_usb_rx(Buf, *Len).")
@@ -149,7 +171,13 @@ class Dispositivo(QObject):
         self.conectado.emit(version)
         threading.Thread(target=self._lector, args=(ser,), daemon=True).start()
 
+    def _avisar_error(self, intento: int, texto: str):
+        if intento == self._intento:       # un intento ya cancelado no molesta con errores
+            self.error.emit(texto)
+
     def _lector(self, ser: serial.Serial):
+        """Hilo lector: arma las líneas de texto y, después de una cabecera DATA, junta los
+        4·n bytes de la captura y los separa en CH1 (16 bits bajos) y CH2 (16 bits altos)."""
         buf = bytearray()
         esperando: dict | None = None
         while self._activo and self._ser is ser:
@@ -194,6 +222,7 @@ class Dispositivo(QObject):
                     self.linea.emit(linea)
 
     def _perdida(self, motivo: str):
+        """Se cortó la comunicación: cierra y avisa (la Ventana intenta reconectar sola)."""
         if self._activo:
             self.cerrar()
             self.desconectado.emit(motivo)

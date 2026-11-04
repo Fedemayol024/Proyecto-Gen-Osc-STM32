@@ -719,5 +719,110 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         self.assertFalse(ruta.exists())
 
 
+@unittest.skipUnless(HAY_QT, "PySide6 no está instalado")
+class TestCapturasCompartidas(unittest.TestCase):
+    """RUN, Single y Autoset no le quitan la captura a un barrido de Bode o a una
+    calibración (antes se la robaban entre sí y los dos quedaban esperando)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._appdata = os.environ.get("APPDATA")
+        os.environ["APPDATA"] = self._tmp.name
+        A.listar_puertos = lambda: []
+        self.v = A.Ventana()
+        self.enviados = []
+        self.v.disp.enviar = lambda t: self.enviados.append(t) or True
+        self._con = mock.patch.object(type(self.v.disp), "esta_conectado", new_callable=mock.PropertyMock,
+                                      return_value=True)
+        self._con.start()
+
+    def tearDown(self):
+        self._con.stop()
+        self.v.close()
+        if self._appdata is None:
+            os.environ.pop("APPDATA", None)
+        else:
+            os.environ["APPDATA"] = self._appdata
+        self._tmp.cleanup()
+
+    def test_con_bode_en_curso_el_osciloscopio_no_pide_capturas(self):
+        self.v.tab_bode.activo = True
+        osc = self.v.tab_osc
+        for accion in (osc._alternar_run, osc._unico, osc._autoset):
+            accion()
+        self.assertFalse(any(t.startswith("CAP ") for t in self.enviados))
+        self.assertFalse(osc.corriendo)
+        self.assertIn("Bode", self.v.statusBar().currentMessage())
+        self.v.tab_bode.activo = False
+
+    def test_con_calibracion_en_curso_el_bode_no_arranca(self):
+        self.v.tab_cal.auto = {"paso": 0}
+        self.v.tab_bode._alternar()
+        self.assertFalse(self.v.tab_bode.activo)
+        self.assertIn("calibración", self.v.statusBar().currentMessage())
+
+    def test_desconectar_cancela_la_calibracion(self):
+        self.v.tab_cal.auto = {"paso": 0}
+        self.v.tab_cal.btn_auto.setEnabled(False)
+        self.v._al_desconectar("prueba", W.TENUE)
+        self.assertIsNone(self.v.tab_cal.auto)
+        self.assertTrue(self.v.tab_cal.btn_auto.isEnabled())
+
+
+@unittest.skipUnless(HAY_QT, "PySide6 no está instalado")
+class TestConexionCancelada(unittest.TestCase):
+    """Si se cancela mientras el hilo todavía está conectando, esa conexión se descarta."""
+
+    class PuertoFalso:
+        def __init__(self, *a, **k):
+            self.salida = b""
+            self.cerrado = False
+
+        def reset_input_buffer(self):
+            pass
+
+        def write(self, d):
+            if b"ID?" in d:
+                self.salida += b"INSTR-F767 v0.9.0\nINFO gen_fs=1000000 osc_fsmax=1588235\n"
+
+        @property
+        def in_waiting(self):
+            return len(self.salida)
+
+        def read(self, n):
+            d, self.salida = self.salida[:n], self.salida[n:]
+            return d
+
+        def close(self):
+            self.cerrado = True
+
+    def test_conexion_vieja_se_descarta(self):
+        import dispositivo as D
+        disp = D.Dispositivo()
+        conectados, errores = [], []
+        disp.conectado.connect(conectados.append)
+        disp.error.connect(errores.append)
+        puertos = []
+        with mock.patch.object(D.serial, "Serial", lambda *a, **k: puertos.append(self.PuertoFalso()) or puertos[-1]):
+            intento = disp._intento
+            disp.cerrar()                       # el usuario canceló mientras conectaba
+            disp._conectar("COM9", intento)
+        self.assertFalse(disp.esta_conectado)
+        self.assertEqual((conectados, errores), ([], []))
+        self.assertTrue(puertos[0].cerrado)
+
+    def test_conexion_vigente_se_completa(self):
+        import dispositivo as D
+        disp = D.Dispositivo()
+        conectados = []
+        disp.conectado.connect(conectados.append)
+        with mock.patch.object(D.serial, "Serial", lambda *a, **k: self.PuertoFalso()), \
+                mock.patch.object(D.threading, "Thread"):      # sin hilo lector en la prueba
+            disp._conectar("COM9", disp._intento)
+        self.assertTrue(disp.esta_conectado)
+        self.assertEqual(conectados, ["0.9.0"])
+        disp.cerrar()
+
+
 if __name__ == "__main__":
     unittest.main()

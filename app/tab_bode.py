@@ -1,15 +1,14 @@
-"""Pestaña Bode: analizador de respuesta en frecuencia.
+"""
+Pestaña Bode: analizador de respuesta en frecuencia.
 
-La fuente (el generador interno CH1, o el módulo AD9833) excita el circuito con
-senoidales de frecuencia creciente. El osciloscopio mide al mismo tiempo la
-entrada del circuito (CH1) y la salida (CH2); la ganancia y la fase salen de
-ajustar una senoidal a cada canal.
-
-Con el generador interno la frecuencia se conoce exacta (comparte el reloj con
-el ADC). Con el AD9833 (reloj propio) se estima de los datos de CH1, y por
-encima de ~fs/2,5 se mide submuestreando: la señal aparece plegada a ~fs/4, y
-como los dos canales se muestrean en el mismo instante el cociente conserva la
-ganancia y la fase reales (ver modelo.respuesta_bode).
+Para cada frecuencia del barrido (logarítmico):
+  1. _siguiente(): pone el generador (DAC interno o AD9833) en esa frecuencia y espera.
+  2. _capturar(): pide una captura de CH1 (entrada) y CH2 (salida) tomadas a la vez.
+     Con el AD9833, arriba de ~fs/2,5 se submuestrea (ver modelo.respuesta_bode).
+  3. al_recibir(): H = CH2/CH1 con un ajuste senoidal de los dos canales. Si la salida es
+     chica, promedia varias capturas.
+Al terminar, _resumen() ajusta un modelo de polos y ceros, dice el tipo de respuesta y la
+frecuencia de corte, y se puede exportar a CSV o a un informe PDF (informe_bode.py).
 """
 from __future__ import annotations
 
@@ -54,6 +53,8 @@ FUENTES = [FUENTE_GEN, FUENTE_DDS]
 
 
 class TabBode(QWidget):
+    """Analizador de respuesta en frecuencia (ver el encabezado del archivo)."""
+
     def __init__(self, ventana):
         super().__init__()
         self.v = ventana
@@ -65,6 +66,11 @@ class TabBode(QWidget):
         self.t_pedido = 0.0
         self.timeout = 2.0
         self.esperando = False
+        # datos para el informe PDF
+        self.meta: dict | None = None       # datos del ensayo (se toman al empezar el barrido)
+        self.t_inicio = 0.0
+        self._ultimo_titulo = self._ultimas_notas = ""
+        self._carpeta_informes = ""
 
         raiz = QHBoxLayout(self)
         raiz.setContentsMargins(8, 8, 8, 8)
@@ -169,6 +175,7 @@ class TabBode(QWidget):
 
     @property
     def con_dds(self) -> bool:
+        """True si la fuente elegida es el módulo AD9833."""
         return self.fuente.currentText() == FUENTE_DDS
 
     def _cambio_fuente(self, *_):
@@ -211,11 +218,16 @@ class TabBode(QWidget):
 
     # ------------------------------------------------------------------
     def _alternar(self):
+        """Botón Iniciar / Detener: arma la lista de frecuencias y arranca el barrido."""
         if self.activo:
             self._terminar("Barrido detenido.")
             return
         if not self.v.disp.esta_conectado:
             self.v.estado("Conectá la placa primero.", W.ALERTA)
+            return
+        aviso = self.v.captura_ocupada("bode")
+        if aviso:
+            self.v.estado(aviso, W.ALERTA)
             return
         f1, f2 = sorted((self.f1.valor(), self.f2.valor()))
         ppd = int(self.ppd.currentText())
@@ -271,6 +283,7 @@ class TabBode(QWidget):
         self._siguiente()
 
     def _siguiente(self):
+        """Pasa a la próxima frecuencia: programa el generador y espera a que se asiente."""
         if not self.activo:
             return
         if self.idx >= len(self.frecs):
@@ -294,6 +307,7 @@ class TabBode(QWidget):
         self.espera.start(int(max(60, 8000 / f)))
 
     def _capturar(self):
+        """Pide la captura de este punto (directa o submuestreada, según la frecuencia)."""
         fsmax = self.v.disp.info.get("osc_fsmax", 1.6e6)
         ventana = int(self.v.disp.info.get("ventana", 8192))
         if self.con_dds:
@@ -310,10 +324,13 @@ class TabBode(QWidget):
         self.timeout = n / fs + 2.0
 
     def _vigilar(self):
+        """Si la captura no llegó a tiempo, se vuelve a pedir."""
         if self.activo and self.esperando and time.monotonic() - self.t_pedido > self.timeout:
             self._capturar()
 
     def al_recibir(self, d: dict):
+        """Llega la captura: H = CH2/CH1 en esta frecuencia. Si la salida es chica se promedian
+        varias capturas (se promedia H complejo, así el ruido se cancela)."""
         if not self.activo:
             return
         self.esperando = False
@@ -356,8 +373,10 @@ class TabBode(QWidget):
         self._siguiente()
 
     def _terminar(self, msg: str):
-        if getattr(self, "meta", None) is not None and self.activo:
-            dur = time.monotonic() - getattr(self, "t_inicio", time.monotonic())
+        """Fin del barrido (o detenido): deja el generador y el osciloscopio como estaban y
+        muestra el resumen."""
+        if self.meta is not None and self.activo:
+            dur = time.monotonic() - self.t_inicio
             self.meta["Duración del barrido"] = f"{dur:.0f} s".replace(".", ",")
             self.meta["Puntos medidos"] = f"{len(self.resultados)} de {len(self.frecs)}"
         self.activo = False
@@ -373,6 +392,7 @@ class TabBode(QWidget):
 
     # ------------------------------------------------------------------ informe
     def _datos_del_ensayo(self, f1, f2, ppd, n) -> dict:
+        """Datos del ensayo para el informe (placa, fuente, rango, amplitud, entradas...)."""
         v = self.v
         osc = v.tab_osc
         entradas = " · ".join(f"CH{c}: {osc.canales[c].entrada.currentText()} "
@@ -406,17 +426,18 @@ class TabBode(QWidget):
         return {k: x for k, x in d.items() if x and not x.startswith("0 ")}
 
     def _informe(self):
+        """Botón «Informe PDF…»: pide título y notas, dónde guardarlo y lo genera."""
         if len(self.resultados) < 2:
             return
         dlg = QDialog(self)
         dlg.setWindowTitle("Informe PDF del Bode")
         lay = QVBoxLayout(dlg)
         lay.addWidget(QLabel("Título (qué circuito es):"))
-        e_tit = QLineEdit(getattr(self, "_ultimo_titulo", ""))
+        e_tit = QLineEdit(self._ultimo_titulo)
         e_tit.setPlaceholderText("p. ej. RL pasaaltos · 1 mH + 220 Ω")
         lay.addWidget(e_tit)
         lay.addWidget(QLabel("Notas (opcional):"))
-        e_not = QPlainTextEdit(getattr(self, "_ultimas_notas", ""))
+        e_not = QPlainTextEdit(self._ultimas_notas)
         e_not.setPlaceholderText("Cómo estaba armado, qué se quería ver…")
         W.tam(e_not, "setMinimumSize", 420, 90)
         lay.addWidget(e_not)
@@ -431,7 +452,7 @@ class TabBode(QWidget):
         self._ultimo_titulo, self._ultimas_notas = e_tit.text(), e_not.toPlainText()
         nombre = nombre_archivo(self._ultimo_titulo) or \
             "bode_" + dt.datetime.now().strftime("%Y-%m-%d_%H%M")
-        carpeta = getattr(self, "_carpeta_informes", "") or \
+        carpeta = self._carpeta_informes or \
             QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
         ruta, _ = QFileDialog.getSaveFileName(self, "Guardar informe",
                                               os.path.join(carpeta, nombre + ".pdf"), "PDF (*.pdf)")
@@ -443,8 +464,9 @@ class TabBode(QWidget):
         self.generar_informe(ruta, self._ultimo_titulo, self._ultimas_notas, abrir=True)
 
     def generar_informe(self, ruta: str, titulo: str = "", notas: str = "", abrir: bool = False) -> bool:
+        """Genera el PDF; True si se pudo guardar."""
         import informe_bode
-        meta = dict(getattr(self, "meta", None) or {"Fecha": dt.datetime.now().strftime("%d/%m/%Y %H:%M")})
+        meta = dict(self.meta or {"Fecha": dt.datetime.now().strftime("%d/%m/%Y %H:%M")})
         try:
             paginas = informe_bode.generar(ruta, self.resultados, self.modelo, self.analisis, meta,
                                            titulo, notas)
@@ -457,6 +479,7 @@ class TabBode(QWidget):
         return True
 
     def _resumen(self):
+        """Ajusta el modelo de polos y ceros y escribe el resumen (tipo, corte, polos, ceros)."""
         if len(self.resultados) < 2:
             return
         arr = np.array(self.resultados)
@@ -534,6 +557,7 @@ class TabBode(QWidget):
         self.v.guardar_config_pronto()
 
     def _exportar(self):
+        """Guarda el barrido en CSV (con las columnas del modelo si lo hay)."""
         if not self.resultados:
             return
         ruta, _ = QFileDialog.getSaveFileName(self, "Exportar Bode", "bode.csv", "CSV (*.csv)")
