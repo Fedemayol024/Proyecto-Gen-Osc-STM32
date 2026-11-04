@@ -379,6 +379,7 @@ def repeticiones_bode(amp: float, residuo: float, n: int, t_captura: float,
 BODE_DIRECTO_MAX = 1 / 2.5          # hasta fs_max/2,5 se mide directo (≥ 2,5 muestras/período)
 BODE_ALIAS_OBJ = 0.25               # el alias se ubica cerca de fs/4 (lejos de 0 y de fs/2)
 BODE_DDS_FMAX = 10e6
+BODE_SEPARACION_BINS = 50           # distancia mínima (en bins de la FFT) a otra componente plegada
 
 
 def alias(f: float, fs: float) -> float:
@@ -391,14 +392,32 @@ def alias(f: float, fs: float) -> float:
 
 
 def fs_submuestreo(f: float, fs_max: float, fs_min: float | None = None,
-                   candidatos: int = 600) -> float:
+                   candidatos: int = 600, n: int = 8192, mclk: float = 25e6,
+                   f_timer: float | None = None) -> float:
     """fs (≤ fs_max) para que el alias de f quede cerca de fs/4: lejos de 0 (no se puede
-    separar de la continua) y de fs/2 (ahí el signo de la fase es ambiguo)."""
+    separar de la continua) y de fs/2 (ahí el signo de la fase es ambiguo).
+    Además se descartan las fs en las que otra componente de la señal cae casi en el mismo
+    lugar que f después de plegarse: los armónicos 2f…5f (justo en fs/4 el 3.º y el 5.º
+    caen encima) y la imagen que saca el AD9833 en mclk − f (a 10 MHz está a solo 3,5 dB
+    de la señal). Así el ajuste senoidal ve únicamente la componente que se quiere medir.
+    Con 'f_timer' (reloj del timer de muestreo de la placa) solo se prueban las fs que el
+    timer puede dar de verdad, f_timer/N: si no, la placa redondea la fs pedida y, a 10 MHz,
+    el alias se corre decenas de bins de donde se calculó."""
     fs_min = fs_min or fs_max * 0.5
-    mejor, puntaje = fs_max, 1e9
-    for fs in np.linspace(fs_max, fs_min, candidatos):
-        r = abs(alias(f, fs)) / fs
+    espurias = [k * f for k in (2, 3, 4, 5)] + ([mclk - f] if 0 < f < mclk else [])
+    if f_timer:
+        divisores = np.arange(math.ceil(f_timer / fs_max - 1e-9), math.floor(f_timer / fs_min) + 1)
+        lista = f_timer / divisores if len(divisores) else np.array([fs_max])
+    else:
+        lista = np.linspace(fs_max, fs_min, candidatos)
+    mejor, puntaje = float(lista[0]), 1e9
+    for fs in lista:
+        a = abs(alias(f, fs))
+        r = a / fs
         p = abs(r - BODE_ALIAS_OBJ) + 0.02 * (1 - fs / fs_max)      # preferir fs alta
+        bin_ = fs / n
+        if any(abs(abs(alias(e, fs)) - a) < BODE_SEPARACION_BINS * bin_ for e in espurias):
+            p += 1.0                                                # otra componente encima
         if p < puntaje:
             mejor, puntaje = float(fs), p
     return mejor
@@ -461,12 +480,13 @@ def respuesta_bode(v1: np.ndarray, v2: np.ndarray, fs: float, f: float,
     return h, abs(x1), abs(x2), r2
 
 
-def captura_bode_dds(f: float, fs_max: float, ventana: int = 8192) -> tuple[int, float, bool]:
-    """(n, fs, submuestreo) para medir f con el AD9833."""
+def captura_bode_dds(f: float, fs_max: float, ventana: int = 8192,
+                     f_timer: float | None = None) -> tuple[int, float, bool]:
+    """(n, fs, submuestreo) para medir f con el AD9833. 'f_timer': ver fs_submuestreo."""
     if f <= fs_max * BODE_DIRECTO_MAX:
         n, fs = captura_bode(f, fs_max, ventana)
         return n, fs, False
-    return ventana, fs_submuestreo(f, fs_max), True
+    return ventana, fs_submuestreo(f, fs_max, n=ventana, f_timer=f_timer), True
 
 
 # ---------------------------------------------------------------------------

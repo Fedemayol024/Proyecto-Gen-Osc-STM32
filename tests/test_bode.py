@@ -161,6 +161,43 @@ class TestBodeSubmuestreo(unittest.TestCase):
                 self.assertGreaterEqual(fs, FS_MAX * 0.5)
                 self.assertAlmostEqual(abs(M.alias(f, fs)) / fs, 0.25, delta=0.02)
 
+    def test_ninguna_espuria_se_pliega_encima_de_la_senal(self):
+        """El 3.er y 5.º armónico (que justo en fs/4 caían encima) y la imagen del AD9833 en
+        25 MHz − f quedan lejos del alias de f, a cualquier frecuencia."""
+        n = 8192
+        for f_timer, fs_max in ((None, FS_MAX), (216e6, FS_MAX), (168e6, 21e6 / 17)):
+            for f in np.logspace(math.log10(700e3), 7, 150):
+                fs = M.fs_submuestreo(f, fs_max, n=n, f_timer=f_timer)
+                a = abs(M.alias(f, fs))
+                for e in (2 * f, 3 * f, 4 * f, 5 * f, 25e6 - f):
+                    self.assertGreaterEqual(abs(abs(M.alias(e, fs)) - a) / (fs / n),
+                                            M.BODE_SEPARACION_BINS - 1e-6, f"f={f:.0f} espuria={e:.0f}")
+
+    def test_solo_pide_fs_que_el_timer_puede_dar(self):
+        """La placa muestrea a 216 MHz / N: pedir otra fs la hace redondear y corre el alias."""
+        for f in (0.9e6, 3.3e6, 7.7e6, 10e6):
+            fs = M.captura_bode_dds(f, FS_MAX, 8192, f_timer=216e6)[1]
+            self.assertAlmostEqual(216e6 / fs, round(216e6 / fs), places=6)
+            self.assertLessEqual(fs, FS_MAX * (1 + 1e-12))
+
+    def test_armonico_e_imagen_no_ensucian_la_medicion(self):
+        """Seno con 3.er armónico a −30 dBc y la imagen del DDS, por un pasabajos de 100 kHz."""
+        rng, n = np.random.default_rng(3), 8192
+        h = lambda x: 1 / (1 + 1j * x / 100e3)                              # noqa: E731
+        sinc = lambda x: math.sin(math.pi * x / 25e6) / (math.pi * x / 25e6)  # noqa: E731
+        for f in (0.86e6, 2.74e6, 8.18e6, 9.78e6):
+            with self.subTest(f=f):
+                fs = M.captura_bode_dds(f, FS_MAX, n, f_timer=216e6)[1]
+                t = np.arange(n) / fs
+                v1, v2 = np.zeros(n), np.zeros(n)
+                for fc, amp in ((f, 1.0), (3 * f, 10 ** (-30 / 20)), (25e6 - f, sinc(25e6 - f) / sinc(f))):
+                    fase = rng.uniform(0, 2 * np.pi)
+                    v1 += amp * np.cos(2 * np.pi * fc * t + fase)
+                    v2 += amp * abs(h(fc)) * np.cos(2 * np.pi * fc * t + fase + cmath.phase(h(fc)))
+                hm, *_ = M.respuesta_bode(v1, v2, fs, f, estimar=True)
+                self.assertLess(abs(20 * math.log10(abs(hm) / abs(h(f)))), 0.05)
+                self.assertLess(abs(math.degrees(cmath.phase(hm / h(f)))), 0.5)
+
     def test_directo_hasta_nyquist_y_submuestreo_arriba(self):
         n, fs, sub = M.captura_bode_dds(100e3, FS_MAX)
         self.assertFalse(sub)

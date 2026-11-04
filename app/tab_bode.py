@@ -311,7 +311,9 @@ class TabBode(QWidget):
         fsmax = self.v.disp.info.get("osc_fsmax", 1.6e6)
         ventana = int(self.v.disp.info.get("ventana", 8192))
         if self.con_dds:
-            n, fs, self.submuestreo = M.captura_bode_dds(self.f_real, fsmax, ventana)
+            # el timer de muestreo (TIM8) corre al reloj del núcleo: 216 MHz en la F767ZI
+            f_timer = self.v.disp.info.get("cpu") or None
+            n, fs, self.submuestreo = M.captura_bode_dds(self.f_real, fsmax, ventana, f_timer)
             if self.submuestreo and not self.acum:
                 self.lbl_prog.setText(f"Punto {self.idx + 1} de {len(self.frecs)}: "
                                       f"{M.si(self.f_real, 'Hz')} · AD9833, submuestreando a "
