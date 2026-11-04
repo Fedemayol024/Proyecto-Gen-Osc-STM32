@@ -27,6 +27,7 @@ _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan
 
 ### Mejorado
 - **Código de la app comentado:** cada archivo `.py` empieza con una explicación de qué hace y cómo se conecta con los demás, y las clases y funciones principales tienen una descripción corta. Sirve para leer el código o exponerlo.
+- **Documentación para exponer** en la carpeta `docs`: «Para pistan» (qué hace cada archivo de la app y cómo se conectan) y «Osciloscopio y Bode con el STM32» (cómo captura el STM32 y cómo el Bode mide hasta 10 MHz submuestreando).
 - Limpieza sin cambios de funcionamiento: se quitaron importaciones y funciones que no se usaban y una variable que tapaba a una función del mismo nombre.
 
 ### Firmware
