@@ -24,12 +24,13 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtGui import QActionGroup, QIcon
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
                                QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton,
                                QStatusBar, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
+import idioma
 import modelo as M
 import widgets as W
 from dispositivo import Dispositivo, listar_puertos
@@ -257,6 +258,36 @@ class Ventana(QMainWindow):
         m.addSeparator()
         a = m.addAction("Ajustar la ventana a la pantalla")
         a.triggered.connect(lambda: self.ajustar_a_pantalla(forzar=True))
+
+        # idioma: el título va en los dos idiomas para que se encuentre siempre
+        m.addSeparator()
+        t = m.addAction("Idioma · Sprache")
+        t.setEnabled(False)
+        grupo_idioma = QActionGroup(m)
+        grupo_idioma.setExclusive(True)
+        for codigo, nombre in idioma.IDIOMAS.items():
+            a = m.addAction(nombre)
+            a.setCheckable(True)
+            a.setChecked(codigo == idioma.actual)
+            a.triggered.connect(lambda _=False, c=codigo: self.elegir_idioma(c))
+            grupo_idioma.addAction(a)
+
+    def elegir_idioma(self, codigo: str):
+        """Guarda el idioma y ofrece reiniciar (los textos se ponen al crear la ventana)."""
+        if codigo == idioma.actual:
+            return
+        M.guardar_idioma(codigo)
+        r = QMessageBox.question(
+            self, "Idioma · Sprache",
+            "Para cambiar el idioma hay que reiniciar la app. ¿Reiniciar ahora?\n\n"
+            "Die Sprache wird nach einem Neustart der App geändert. Jetzt neu starten?")
+        if r == QMessageBox.Yes:
+            # el .exe se vuelve a abrir solo; con Python, «python main.py ...»
+            args = sys.argv[1:] if getattr(sys, "frozen", False) else \
+                [str(Path(sys.argv[0]).resolve())] + sys.argv[1:]
+            self.close()                                  # guarda la configuración y suelta el puerto
+            QProcess.startDetached(sys.executable, args)
+            QApplication.instance().quit()
 
     def elegir_resolucion(self, res: tuple[int, int] | None):
         M.guardar_resolucion(res)
@@ -559,6 +590,7 @@ def resolucion_de(pantalla) -> tuple[int, int]:
 def main():
     """Arranque: escala de la interfaz, estilo, ícono, elección de placa y ventana."""
     app = QApplication(sys.argv)
+    idioma.instalar(M.idioma_guardado(), app)          # antes de crear cualquier ventana
     W.ESCALA = M.escala_para(M.resolucion_guardada(), resolucion_de(app.primaryScreen()))
     app.setStyleSheet(W.estilo())
     ico = recurso("icono.ico")

@@ -397,7 +397,7 @@ class TabBode(QWidget):
         """Datos del ensayo para el informe (placa, fuente, rango, amplitud, entradas...)."""
         v = self.v
         osc = v.tab_osc
-        entradas = " · ".join(f"CH{c}: {osc.canales[c].entrada.currentText()} "
+        entradas = " · ".join(f"CH{c}: {osc.canales[c].entrada.currentText()}, "
                               f"{osc.canales[c].punta.currentText()}" for c in (1, 2))
         if self.con_dds:
             c = v.tab_gen.dds.c

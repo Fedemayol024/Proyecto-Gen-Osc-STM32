@@ -252,8 +252,11 @@ class TestPestanaOsciloscopio(unittest.TestCase):
         textos = [a.text() for a in self.v.menu_opciones.actions() if a.text()]
         self.assertTrue(textos[1].startswith("Automática · la de la pantalla (1920×1080)"))
         marcadas = [a.text() for a in self.v.menu_opciones.actions() if a.isChecked()]
-        self.assertEqual(len(marcadas), 1)
+        self.assertEqual(len(marcadas), 2)                          # una resolución y un idioma
         self.assertTrue(marcadas[0].startswith("Automática"))      # por defecto: la del sistema
+        self.assertEqual(marcadas[1], "Español")
+        self.assertIn("Idioma · Sprache", textos)
+        self.assertIn("Deutsch", textos)
         self.assertTrue(any(t.startswith("1366×768") and "más grande" in t for t in textos))
         self.assertTrue(any(t.startswith("1920×1080") and "igual a la pantalla" in t for t in textos))
         self.assertTrue(any(t.startswith("3840×2160") and "entra más" in t for t in textos))

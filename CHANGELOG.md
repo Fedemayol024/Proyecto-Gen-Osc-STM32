@@ -19,6 +19,13 @@ La app (`VERSION` en `app/main.py`) y el firmware (`INSTR_VERSION` en `instrumen
 
 _Acá se anotan los cambios a medida que se hacen; al subir de versión se pasan a una sección con número y fecha._
 
+### Nuevo
+- **La app en alemán (Deutsch).** En ⚙ (arriba a la derecha) hay una sección «Idioma · Sprache» para elegir entre Español y Deutsch. La app ofrece reiniciarse para aplicar el cambio, y el idioma queda guardado.
+  - Se traduce todo lo que se ve: pestañas, botones, desplegables, ayudas, mensajes de la barra de estado, avisos, los textos de los gráficos, el dibujo de la placa, los diálogos (calibración del AD9833, análisis de espectro, exportar imagen, informe) y el **informe PDF del Bode**. Los botones estándar y el diálogo para guardar archivos también salen en alemán.
+  - La configuración guardada, las calibraciones y los CSV no cambian con el idioma: se puede pasar de uno a otro sin perder nada.
+  - Con el castellano la app funciona exactamente igual que antes.
+  - Las traducciones están en `app/traducciones_de.py`; si aparece algún texto sin traducir, se agrega ahí copiando el castellano exacto como clave. `pruebas/revisar_idioma.py` recorre la app en alemán con la placa simulada y lista lo que haya quedado en castellano.
+
 ### Corregido
 - **El osciloscopio y el Bode ya no se pisan las capturas.** Si con un barrido de Bode o una calibración de las entradas en curso se tocaba RUN, Single o Autoset (o al revés), los dos se quitaban la captura entre sí y quedaban esperando. Ahora el segundo no arranca y la barra de estado dice qué está en curso.
 - **Calibración de entradas que quedaba colgada:** si se desconectaba la placa en medio de la autocalibración, el botón quedaba deshabilitado. Ahora se cancela y se avisa.

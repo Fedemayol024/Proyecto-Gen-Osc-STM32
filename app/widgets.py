@@ -19,6 +19,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
+import idioma
 import modelo as M
 
 # Colores (tema oscuro de instrumento)
@@ -287,7 +288,7 @@ class EtiquetaRecortable(QLabel):
         self.setText(texto)
 
     def setText(self, texto: str):
-        self._completo = texto
+        self._completo = idioma.tr(texto)          # se recorta el texto ya traducido
         self.setToolTip(texto)
         self._recortar()
 

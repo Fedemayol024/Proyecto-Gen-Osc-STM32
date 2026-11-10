@@ -364,10 +364,11 @@ class TestConfig(unittest.TestCase):
         self.assertIsNone(M.leer_resolucion("auto"))
 
     def test_preferencias_de_placa(self):
-        auto = {"placa": "F767", "preguntar": True, "resolucion": "auto"}
+        auto = {"placa": "F767", "preguntar": True, "resolucion": "auto", "idioma": "es"}
         self.assertEqual(M.cargar_preferencias(), auto)
         M.guardar_preferencias({"placa": "F429", "preguntar": False})
-        self.assertEqual(M.cargar_preferencias(), {"placa": "F429", "preguntar": False, "resolucion": "auto"})
+        self.assertEqual(M.cargar_preferencias(), {"placa": "F429", "preguntar": False, "resolucion": "auto",
+                                                   "idioma": "es"})
         M.guardar_resolucion((1366, 768))
         self.assertEqual(M.resolucion_guardada(), (1366, 768))
         self.assertEqual(M.cargar_preferencias()["placa"], "F429")         # no pisa lo demás

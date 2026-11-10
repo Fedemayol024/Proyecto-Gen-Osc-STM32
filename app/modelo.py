@@ -1352,8 +1352,8 @@ def escala_para(resolucion: tuple[int, int] | None, pantalla: tuple[int, int]) -
 
 
 def cargar_preferencias() -> dict:
-    """{"placa": "F767", "preguntar": True, "resolucion": "auto" | "1920x1080"}"""
-    pref = {"placa": PLACA_POR_DEFECTO, "preguntar": True, "resolucion": RESOLUCION_AUTO}
+    """{"placa": "F767", "preguntar": True, "resolucion": "auto" | "1920x1080", "idioma": "es" | "de"}"""
+    pref = {"placa": PLACA_POR_DEFECTO, "preguntar": True, "resolucion": RESOLUCION_AUTO, "idioma": "es"}
     try:
         d = json.loads(ruta_preferencias().read_text(encoding="utf-8"))
         if isinstance(d, dict):
@@ -1363,6 +1363,8 @@ def cargar_preferencias() -> dict:
             res = leer_resolucion(d.get("resolucion"))
             if res:
                 pref["resolucion"] = f"{res[0]}x{res[1]}"
+            if d.get("idioma") in ("es", "de"):
+                pref["idioma"] = d["idioma"]
     except (OSError, ValueError, TypeError):
         pass
     return pref
@@ -1376,6 +1378,17 @@ def resolucion_guardada() -> tuple[int, int] | None:
 def guardar_resolucion(res: tuple[int, int] | None):
     pref = cargar_preferencias()
     pref["resolucion"] = f"{res[0]}x{res[1]}" if res else RESOLUCION_AUTO
+    guardar_preferencias(pref)
+
+
+def idioma_guardado() -> str:
+    """Idioma de la interfaz: "es" (castellano) o "de" (alemán)."""
+    return cargar_preferencias()["idioma"]
+
+
+def guardar_idioma(codigo: str):
+    pref = cargar_preferencias()
+    pref["idioma"] = codigo
     guardar_preferencias(pref)
 
 

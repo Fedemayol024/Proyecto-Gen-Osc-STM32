@@ -716,7 +716,9 @@ class TabPlaca(QWidget):
         sc_con.setWidgetResizable(True)            # de agrandar la ventana
         sc_con.setWidget(self.dib_con)
         pl.addWidget(sc_con, 1)
-        self.combo.currentTextChanged.connect(self.dib_con.set_esquema)
+        # currentText() (no el texto que emite la señal): con otro idioma la señal trae el
+        # texto traducido y el esquema se busca por el nombre original
+        self.combo.currentIndexChanged.connect(lambda _: self.dib_con.set_esquema(self.combo.currentText()))
         self.sub.addTab(pag, "Conexiones")
 
         self.actualizar()
